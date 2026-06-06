@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta content="width=device-width, initial-scale=1" name="viewport">
+    <title>Cubing Assistant Login</title>
+    <script src="/static/theme.js"></script>
+    <script defer src="/static/logo.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&family=Material+Symbols+Outlined&display=swap"
+          rel="stylesheet">
+    <link href="/static/login.css" rel="stylesheet">
+    <script async src="https://accounts.google.com/gsi/client"></script>
+</head>
+<body>
+<nav aria-label="Primary navigation" class="side-tabs">
+    <a aria-label="Cubing Assistant" class="side-brand" href="/solve">
+        <span data-inline-logo></span>
+    </a>
+    <a aria-label="Solve timer" class="side-tab" href="/solve" title="Solve timer">
+        <span aria-hidden="true" class="material-symbols-outlined">timer</span>
+    </a>
+    <a aria-label="Analytics" class="side-tab" href="/analytics" title="Analytics">
+        <span aria-hidden="true" class="material-symbols-outlined">bar_chart</span>
+    </a>
+    <a aria-label="Manage sessions" class="side-tab" href="/manage" title="Manage sessions">
+        <span aria-hidden="true" class="material-symbols-outlined">folder</span>
+    </a>
+    <a aria-label="Appearance" class="side-tab" href="/appearance" title="Appearance">
+        <span aria-hidden="true" class="material-symbols-outlined">palette</span>
+    </a>
+    <a aria-label="Login" class="side-tab active" href="/login" title="Login">
+        <span aria-hidden="true" class="material-symbols-outlined">person</span>
+    </a>
+</nav>
+
+<main class="login-app">
+    <header>
+        <h1><span aria-hidden="true" class="material-symbols-outlined">cloud_sync</span> Google Account</h1>
+        <p>Sign in to prepare this browser for Drive synchronization.</p>
+    </header>
+
+    <section class="login-panel">
+        <div id="signedOutView">
+            <h2>Sign in</h2>
+            <p>Use the Google account whose Drive should hold your solve history.</p>
+            <div class="google-signin-clip">
+                <div id="googleSigninButton"></div>
+            </div>
+        </div>
+
+        <div hidden id="signedInView">
+            <div class="profile">
+                <img alt="" id="profilePicture">
+                <div>
+                    <h2 id="profileName"></h2>
+                    <p id="profileEmail"></p>
+                </div>
+            </div>
+            <p class="status-line">Signed in on this browser.</p>
+            <button id="signOut" type="button">Sign out</button>
+        </div>
+    </section>
+
+    <section class="sync-panel">
+        <h2>Drive Sync</h2>
+        <p id="driveStatus">Sign in first, then connect Drive to synchronize solve history across devices.</p>
+        <div class="sync-actions">
+            <button hidden id="connectDrive" type="button">Enable Drive Sync</button>
+            <button hidden id="disconnectDrive" type="button">Disconnect Drive</button>
+        </div>
+        <div aria-label="Manual synchronization" class="manual-sync">
+            <div class="manual-sync-header">
+                <h2>Manual Sync</h2>
+                <p id="lastSynced">Auto Sync Time: Never</p>
+            </div>
+            <label class="sync-mode">
+                <span>Conflict mode</span>
+                <select id="conflictMode">
+                    <option selected value="newest">Merge automatically</option>
+                    <option value="newest">Prefer newest changes</option>
+                    <option value="local">Prefer local</option>
+                    <option value="drive">Prefer Drive</option>
+                </select>
+            </label>
+            <p id="manualSyncStatus">Connect Drive to enable manual sync.</p>
+            <div class="manual-sync-actions">
+                <button disabled id="syncNow" type="button"><span class="material-symbols-outlined">sync</span> Sync now
+                </button>
+                <button disabled id="uploadLocal" type="button"><span
+                        class="material-symbols-outlined">cloud_upload</span> Upload local data
+                </button>
+                <button disabled id="downloadDrive" type="button"><span
+                        class="material-symbols-outlined">cloud_download</span> Download from Drive
+                </button>
+            </div>
+        </div>
+    </section>
+</main>
+
+<script src="/static/login.js"></script>
+</body>
+</html>

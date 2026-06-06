@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta content="width=device-width, initial-scale=1" name="viewport">
+    <title>Cubing Assistant Appearance</title>
+    <script src="/static/theme.js"></script>
+    <script defer src="/static/logo.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&family=Material+Symbols+Outlined&display=swap"
+          rel="stylesheet">
+    <link href="/static/appearance.css" rel="stylesheet">
+</head>
+<body>
+<nav aria-label="Primary navigation" class="side-tabs">
+    <a aria-label="Cubing Assistant" class="side-brand" href="/solve">
+        <span data-inline-logo></span>
+    </a>
+    <a aria-label="Solve timer" class="side-tab" href="/solve" title="Solve timer"><span
+            class="material-symbols-outlined">timer</span></a>
+    <a aria-label="Analytics" class="side-tab" href="/analytics" title="Analytics"><span
+            class="material-symbols-outlined">bar_chart</span></a>
+    <a aria-label="Manage sessions" class="side-tab" href="/manage" title="Manage sessions"><span
+            class="material-symbols-outlined">folder</span></a>
+    <a aria-label="Appearance" class="side-tab active" href="/appearance" title="Appearance"><span
+            class="material-symbols-outlined">palette</span></a>
+    <a aria-label="Login" class="side-tab" href="/login" title="Login"><span
+            class="material-symbols-outlined">person</span></a>
+</nav>
+
+<main class="appearance-app">
+    <header>
+        <div>
+            <h1>Appearance</h1>
+            <p>Customize app colors or import a csTimer color theme.</p>
+        </div>
+    </header>
+
+    <section class="panel">
+        <div class="panel-heading">
+            <h2>Presets</h2>
+            <label class="mode-switch">
+                <span>Dark</span>
+                <input id="themeModeToggle" type="checkbox">
+                <span>Light</span>
+            </label>
+        </div>
+        <div class="preset-grid" id="themePresets"></div>
+    </section>
+
+    <section class="panel">
+        <div class="panel-heading">
+            <h2>Colors</h2>
+            <span id="themeStatus">Saved locally</span>
+        </div>
+        <div class="theme-grid" id="themeControls"></div>
+    </section>
+
+    <section class="panel import-panel">
+        <div class="panel-heading">
+            <h2>Import csTimer</h2>
+            <span>Backup file or color line</span>
+        </div>
+        <div class="import-grid">
+            <label class="file-picker">
+                <span class="material-symbols-outlined">upload_file</span>
+                <span>Upload csTimer file</span>
+                <input accept=".txt,.json,application/json,text/plain" id="cstimerThemeFile" type="file">
+            </label>
+            <label class="paste-field">
+                <span>Color line</span>
+                <textarea id="cstimerColorLine" placeholder="#eee#035#034#111#28d#678#034#f40" rows="3"
+                          spellcheck="false"></textarea>
+            </label>
+            <div class="import-actions">
+                <button id="applyColorLine" type="button"><span class="material-symbols-outlined">input</span> Apply
+                    line
+                </button>
+            </div>
+        </div>
+        <p class="message" id="importMessage"></p>
+    </section>
+
+    <section class="preview-panel preview-panel-side">
+        <div class="preview-header">
+            <span>Preview</span>
+            <button type="button">Button</button>
+        </div>
+        <div class="preview-body">
+            <div class="preview-timer">12.34</div>
+            <div class="preview-card">
+                <strong>Current ao5</strong>
+                <span>14.82</span>
+            </div>
+        </div>
+    </section>
+</main>
+
+<script src="/static/appearance.js"></script>
+</body>
+</html>

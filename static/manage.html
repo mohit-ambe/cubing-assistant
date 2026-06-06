@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta content="width=device-width, initial-scale=1" name="viewport">
+    <title>Cubing Assistant Manage</title>
+    <script src="/static/theme.js"></script>
+    <script defer src="/static/logo.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&family=Material+Symbols+Outlined&display=swap"
+          rel="stylesheet">
+    <link href="/static/manage.css" rel="stylesheet">
+</head>
+<body>
+<nav aria-label="Primary navigation" class="side-tabs">
+    <a aria-label="Cubing Assistant" class="side-brand" href="/solve">
+        <span data-inline-logo></span>
+    </a>
+    <a aria-label="Solve timer" class="side-tab" href="/solve" title="Solve timer"><span
+            class="material-symbols-outlined">timer</span></a>
+    <a aria-label="Analytics" class="side-tab" href="/analytics" title="Analytics"><span
+            class="material-symbols-outlined">bar_chart</span></a>
+    <a aria-label="Manage sessions" class="side-tab active" href="/manage" title="Manage sessions"><span
+            class="material-symbols-outlined">folder</span></a>
+    <a aria-label="Appearance" class="side-tab" href="/appearance" title="Appearance"><span
+            class="material-symbols-outlined">palette</span></a>
+    <a aria-label="Login" class="side-tab" href="/login" title="Login"><span
+            class="material-symbols-outlined">person</span></a>
+</nav>
+
+<main class="manage-app">
+    <aside class="session-sidebar">
+        <header>
+            <h1>Manage</h1>
+            <p>Sessions and backups</p>
+        </header>
+        <div class="sidebar-tools">
+            <label class="search-field">
+                <span class="material-symbols-outlined">search</span>
+                <input aria-label="Search sessions" id="sessionSearch" placeholder="Search sessions" type="search">
+            </label>
+            <label>
+                <span>Format</span>
+                <select aria-label="Filter by cube type" id="eventFilter"></select>
+            </label>
+        </div>
+        <div class="sidebar-actions">
+            <button id="newSession" type="button"><span class="material-symbols-outlined">add</span> New</button>
+            <button id="importCstimer" type="button"><span class="material-symbols-outlined">upload_file</span> Import
+                csTimer
+            </button>
+            <button id="exportBackup" title="Export application backup" type="button"><span
+                    class="material-symbols-outlined">download</span></button>
+        </div>
+        <ol class="session-list" id="sessionList"></ol>
+    </aside>
+
+    <section class="session-detail" id="sessionDetail"></section>
+</main>
+
+<dialog class="dialog" id="sessionDialog">
+    <form method="dialog">
+        <h2 id="sessionDialogTitle">New session</h2>
+        <label class="dialog-field"><span>Name</span><input id="sessionName" maxlength="60" required></label>
+        <label class="dialog-field"><span>Cube type</span><select id="sessionEvent"></select></label>
+        <div class="dialog-actions">
+            <button type="submit" value="cancel">Cancel</button>
+            <button id="saveSession" type="submit" value="confirm">Save</button>
+        </div>
+    </form>
+</dialog>
+
+<dialog class="dialog import-dialog" id="importDialog">
+    <form method="dialog">
+        <div class="dialog-heading">
+            <div>
+                <h2>Import csTimer backup</h2>
+                <p id="importSummary">Choose a csTimer export file.</p>
+            </div>
+            <button aria-label="Close" type="submit" value="cancel"><span class="material-symbols-outlined">close</span>
+            </button>
+        </div>
+        <label class="file-picker">
+            <span class="material-symbols-outlined">upload_file</span>
+            <span>Select csTimer file</span>
+            <input accept=".txt,.json,application/json,text/plain" id="cstimerFile" type="file">
+        </label>
+        <p class="error" hidden id="importError"></p>
+        <div class="import-table-wrap">
+            <table class="import-table">
+                <thead>
+                <tr>
+                    <th>Source session</th>
+                    <th>Cube type</th>
+                    <th>Solves</th>
+                    <th>Action</th>
+                    <th>Destination</th>
+                </tr>
+                </thead>
+                <tbody id="importRows"></tbody>
+            </table>
+        </div>
+        <div class="dialog-actions">
+            <button type="submit" value="cancel">Cancel</button>
+            <button disabled id="commitImport" type="button">Import selected</button>
+        </div>
+    </form>
+</dialog>
+
+<dialog class="dialog" id="confirmDialog">
+    <form method="dialog">
+        <h2 id="confirmTitle"></h2>
+        <p id="confirmText"></p>
+        <div class="dialog-actions">
+            <button type="submit" value="cancel">Cancel</button>
+            <button class="danger" id="confirmAction" type="submit" value="confirm">Confirm</button>
+        </div>
+    </form>
+</dialog>
+
+<script src="/static/manage.js"></script>
+</body>
+</html>

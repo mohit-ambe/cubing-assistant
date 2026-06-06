@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta content="width=device-width, initial-scale=1" name="viewport">
+    <title>Cubing Assistant Analytics</title>
+    <script src="/static/theme.js"></script>
+    <script defer src="/static/logo.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&family=Material+Symbols+Outlined&display=swap"
+          rel="stylesheet">
+    <link href="/static/analytics.css" rel="stylesheet">
+</head>
+<body>
+<nav aria-label="Primary navigation" class="side-tabs">
+    <a aria-label="Cubing Assistant" class="side-brand" href="/solve">
+        <span data-inline-logo></span>
+    </a>
+    <a aria-label="Solve timer" class="side-tab" href="/solve" title="Solve timer">
+        <span aria-hidden="true" class="material-symbols-outlined">timer</span>
+    </a>
+    <a aria-label="Analytics" class="side-tab active" href="/analytics" title="Analytics">
+        <span aria-hidden="true" class="material-symbols-outlined">bar_chart</span>
+    </a>
+    <a aria-label="Manage sessions" class="side-tab" href="/manage" title="Manage sessions">
+        <span aria-hidden="true" class="material-symbols-outlined">folder</span>
+    </a>
+    <a aria-label="Appearance" class="side-tab" href="/appearance" title="Appearance">
+        <span aria-hidden="true" class="material-symbols-outlined">palette</span>
+    </a>
+    <a aria-label="Login" class="side-tab" href="/login" title="Login">
+        <span aria-hidden="true" class="material-symbols-outlined">person</span>
+    </a>
+</nav>
+
+<main class="analytics-app">
+    <header class="analytics-header">
+        <div>
+            <h1>Analytics</h1>
+            <p id="summaryLine">Loading solve history...</p>
+        </div>
+
+        <section aria-label="Analytics filters" class="filters">
+            <label>
+                <span>Event</span>
+                <select id="eventFilter"></select>
+            </label>
+            <label>
+                <span>Range</span>
+                <select id="rangeFilter">
+                    <option value="7">Last 7 days</option>
+                    <option selected value="30">Last 30 days</option>
+                    <option value="90">Last 90 days</option>
+                    <option value="all">All time</option>
+                </select>
+            </label>
+            <label>
+                <span>Rolling</span>
+                <select id="rollingFilter">
+                    <option value="5">ao5</option>
+                    <option selected value="12">ao12</option>
+                    <option value="100">ao100</option>
+                </select>
+            </label>
+        </section>
+    </header>
+
+    <section aria-label="Summary statistics" class="stat-grid" id="statCards"></section>
+
+    <section class="chart-grid">
+        <article class="chart-panel trend-panel">
+            <div class="panel-heading">
+                <h2>Trend</h2>
+                <span id="trendMeta"></span>
+            </div>
+            <div class="chart" id="trendChart"></div>
+        </article>
+
+        <article class="chart-panel distribution-panel">
+            <div class="panel-heading">
+                <h2>Distribution</h2>
+                <span id="distributionMeta"></span>
+            </div>
+            <div class="chart" id="distributionChart"></div>
+        </article>
+
+        <article class="chart-panel daily-panel">
+            <div class="panel-heading">
+                <h2>Solve Count</h2>
+                <span>daily volume</span>
+            </div>
+            <div class="chart" id="dailyChart"></div>
+        </article>
+
+        <article class="chart-panel formats-panel">
+            <div class="panel-heading">
+                <h2>Formats</h2>
+                <span>median by event</span>
+            </div>
+            <div class="chart" id="eventChart"></div>
+        </article>
+
+    </section>
+</main>
+
+<script src="/static/analytics.js"></script>
+</body>
+</html>

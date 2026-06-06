@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta content="width=device-width, initial-scale=1" name="viewport">
+    <title>Cubing Assistant Timer</title>
+    <script src="/static/theme.js"></script>
+    <script defer src="/static/logo.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&family=Material+Symbols+Outlined&display=swap"
+          rel="stylesheet">
+    <link href="/static/styles.css" rel="stylesheet">
+    <script src="https://cdn.cubing.net/v0/js/scramble-display" type="module"></script>
+</head>
+<body>
+<nav aria-label="Primary navigation" class="side-tabs">
+    <a aria-label="Cubing Assistant" class="side-brand" href="/solve">
+        <span data-inline-logo></span>
+    </a>
+    <a aria-label="Solve timer" class="side-tab active" href="/solve" title="Solve timer">
+        <span aria-hidden="true" class="material-symbols-outlined">timer</span>
+    </a>
+    <a aria-label="Analytics" class="side-tab" href="/analytics" title="Analytics">
+        <span aria-hidden="true" class="material-symbols-outlined">bar_chart</span>
+    </a>
+    <a aria-label="Manage sessions" class="side-tab" href="/manage" title="Manage sessions">
+        <span aria-hidden="true" class="material-symbols-outlined">folder</span>
+    </a>
+    <a aria-label="Appearance" class="side-tab" href="/appearance" title="Appearance">
+        <span aria-hidden="true" class="material-symbols-outlined">palette</span>
+    </a>
+    <a aria-label="Login" class="side-tab" href="/login" title="Login">
+        <span aria-hidden="true" class="material-symbols-outlined">person</span>
+    </a>
+</nav>
+
+<main aria-label="Cubing timer" class="app">
+    <section aria-label="Current scramble" class="scramble-panel">
+        <div class="scramble-meta">
+            <div class="session-picker">
+                <select aria-label="Session" id="sessionSelect"></select>
+                <button aria-label="Create session" id="createSession" title="Create session" type="button">
+                    <span class="material-symbols-outlined">add</span>
+                </button>
+            </div>
+            <label class="event-picker">
+                <span>Scramble</span>
+                <select aria-label="Scramble type" id="eventSelect"></select>
+            </label>
+            <span class="fixed-event-label" hidden id="fixedEventLabel"></span>
+            <div class="scramble-actions">
+                <span id="scrambleCount">0 / 0</span>
+                <div class="scramble-controls">
+                    <div aria-label="Scramble font size" class="font-controls">
+                        <button aria-label="Decrease scramble font size" id="decreaseScrambleFont" type="button">-
+                        </button>
+                        <button aria-label="Increase scramble font size" id="increaseScrambleFont" type="button">+
+                        </button>
+                    </div>
+                    <button id="randomScramble" type="button"><span class="material-symbols-outlined">refresh</span>
+                        Random
+                    </button>
+                </div>
+            </div>
+        </div>
+        <p class="scramble" id="scramble">Loading scrambles...</p>
+    </section>
+
+    <div aria-label="Resize scramble panel" aria-orientation="horizontal" class="resize-handle resize-handle-horizontal"
+         data-resize="scramble" role="separator"></div>
+
+    <section aria-label="Timer" class="timer-panel">
+        <div aria-live="polite" class="timer idle" id="timer">0.00</div>
+        <div class="status" id="status">Hold space to ready, release to start</div>
+        <aside aria-label="Scramble drawing" class="scramble-drawing-panel">
+            <div class="scramble-drawing-heading">
+                <span aria-hidden="true" class="material-symbols-outlined">deployed_code</span>
+                <span>Scramble drawing</span>
+            </div>
+            <scramble-display event="333" id="scrambleDrawing"></scramble-display>
+            <div aria-label="Resize scramble drawing from top left"
+                 class="scramble-drawing-resize scramble-drawing-resize-nw"
+                 data-resize-corner="nw" role="separator"></div>
+            <div aria-label="Resize scramble drawing from top right"
+                 class="scramble-drawing-resize scramble-drawing-resize-ne"
+                 data-resize-corner="ne" role="separator"></div>
+            <div aria-label="Resize scramble drawing from bottom left"
+                 class="scramble-drawing-resize scramble-drawing-resize-sw"
+                 data-resize-corner="sw" role="separator"></div>
+            <div aria-label="Resize scramble drawing from bottom right"
+                 class="scramble-drawing-resize scramble-drawing-resize-se"
+                 data-resize-corner="se" role="separator"></div>
+        </aside>
+    </section>
+
+    <div aria-label="Resize times panel" aria-orientation="vertical" class="resize-handle resize-handle-vertical"
+         data-resize="times" role="separator"></div>
+
+    <aside aria-label="Times list" class="times-panel">
+        <div class="times-header">
+            <h1>Times</h1>
+            <div class="times-actions">
+                <button aria-label="Export data" id="exportTimes" title="Export data" type="button"><span
+                        class="material-symbols-outlined">ios_share</span></button>
+                <button aria-label="Clear session" id="clearTimes" title="Clear session" type="button"><span
+                        class="material-symbols-outlined">delete_sweep</span></button>
+            </div>
+        </div>
+        <table aria-label="Solve statistics" class="stats-table">
+            <thead>
+            <tr>
+                <th scope="col"></th>
+                <th scope="col">Current</th>
+                <th scope="col">Best</th>
+            </tr>
+            </thead>
+            <tbody id="statsBody"></tbody>
+        </table>
+        <ol class="times-list" id="timesList"></ol>
+    </aside>
+</main>
+
+<dialog class="confirm-dialog" id="clearConfirmDialog">
+    <form method="dialog">
+        <h2>Clear times?</h2>
+        <p>This removes all solves for the selected session.</p>
+        <div class="dialog-actions">
+            <button id="cancelClearTimes" type="submit" value="cancel">Cancel</button>
+            <button id="confirmClearTimes" type="submit" value="confirm">Clear</button>
+        </div>
+    </form>
+</dialog>
+
+<dialog class="confirm-dialog" id="createSessionDialog">
+    <form method="dialog">
+        <h2>Create session</h2>
+        <label class="dialog-field">
+            <span>Name</span>
+            <input id="newSessionName" maxlength="40" placeholder="Session name" type="text">
+        </label>
+        <label class="dialog-field">
+            <span>Cube type</span>
+            <select id="newSessionEvent"></select>
+        </label>
+        <div class="dialog-actions">
+            <button type="submit" value="cancel">Cancel</button>
+            <button id="confirmCreateSession" type="submit" value="confirm">Create</button>
+        </div>
+    </form>
+</dialog>
+
+<dialog class="confirm-dialog average-dialog" id="averageDialog">
+    <form method="dialog">
+        <h2 id="averageDialogTitle">Average</h2>
+        <p id="averageDialogSummary"></p>
+        <ol class="average-times" id="averageDialogTimes"></ol>
+        <div class="dialog-actions average-dialog-actions">
+            <button id="copyAverageLog" type="button">Copy</button>
+            <button type="submit" value="close">Close</button>
+        </div>
+    </form>
+</dialog>
+
+<script src="/static/timer.js"></script>
+</body>
+</html>

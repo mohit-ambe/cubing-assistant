@@ -1,0 +1,326 @@
+:root {
+    color-scheme: dark;
+    --bg: #121314;
+    --surface-lowest: #0d0e0f;
+    --surface-low: #1b1c1d;
+    --surface: #1f2021;
+    --surface-high: #292a2b;
+    --surface-highest: #343536;
+    --text: #e3e2e3;
+    --muted: #c3c6d5;
+    --outline: #434653;
+    --primary: #5781ff;
+    --primary-container: #3366cc;
+    --danger: #ff6352;
+    --side-tabs-width: 84px;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html, body {
+    min-height: 100%;
+}
+
+body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: Inter, system-ui, sans-serif;
+}
+
+.material-symbols-outlined {
+    font-size: 20px;
+    font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 20;
+}
+
+button, select {
+    border: 1px solid var(--outline);
+    border-radius: 3px;
+    background: var(--surface-high);
+    color: var(--text);
+    cursor: pointer;
+    font: 500 13px/18px Inter, sans-serif;
+    padding: .65rem .8rem;
+}
+
+button:hover, select:hover {
+    border-color: var(--primary);
+    background: var(--surface-highest);
+}
+
+button:disabled {
+    cursor: not-allowed;
+    opacity: .5;
+}
+
+.side-tabs {
+    align-items: center;
+    background: var(--bg);
+    border-right: 1px solid var(--outline);
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    height: 100dvh;
+    left: 0;
+    padding: 16px 8px;
+    position: fixed;
+    top: 0;
+    width: var(--side-tabs-width);
+}
+
+.side-brand {
+    align-items: center;
+    color: var(--primary);
+    display: flex;
+    height: 80px;
+    justify-content: center;
+    text-decoration: none;
+    --logo-secondary: var(--bg);
+    width: 80px;
+}
+
+.side-brand [data-inline-logo] {
+    display: block;
+    height: 80px;
+    width: 80px;
+}
+
+.side-brand-svg {
+    display: block;
+    height: 100%;
+    width: 100%;
+}
+
+.side-tab {
+    align-items: center;
+    border-radius: 12px;
+    color: var(--muted);
+    display: flex;
+    height: 40px;
+    justify-content: center;
+    text-decoration: none;
+    width: 40px;
+}
+
+.side-tab:hover {
+    background: var(--surface-high);
+    color: var(--text);
+}
+
+.side-tab.active {
+    background: var(--surface-high);
+    color: var(--primary);
+}
+
+.login-app {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin: 0 auto;
+    max-width: 920px;
+    padding: clamp(7rem, 18vh, 16rem) 20px 32px calc(var(--side-tabs-width) + 20px);
+}
+
+h1, h2, p {
+    margin: 0;
+}
+
+h1 {
+    color: var(--primary);
+    font-size: 18px;
+}
+
+h1 {
+    align-items: center;
+    display: flex;
+    gap: 8px;
+}
+
+h2 {
+    color: var(--muted);
+    font: 500 12px/16px "JetBrains Mono", monospace;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+
+p {
+    color: var(--muted);
+    font-size: 14px;
+    line-height: 1.55;
+}
+
+header, .login-panel, .sync-panel {
+    background: var(--surface-low);
+    border: 1px solid var(--outline);
+    padding: 28px 30px;
+}
+
+header {
+    border-bottom: 16px solid var(--outline);
+    display: grid;
+    gap: 12px;
+    grid-column: 1 / -1;
+}
+
+.login-panel {
+    border-right: 8px solid var(--outline);
+    display: grid;
+    min-height: 320px;
+}
+
+.sync-panel {
+    border-left: 8px solid var(--outline);
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    min-height: 320px;
+}
+
+#signedOutView, #signedInView {
+    align-content: start;
+    display: grid;
+    gap: 18px;
+}
+
+#signedOutView[hidden], #signedInView[hidden] {
+    display: none;
+}
+
+#signedOutView h2, #signedInView h2, .sync-panel h2 {
+    margin-bottom: 12px;
+}
+
+.google-signin-clip {
+    align-self: start;
+    border-radius: 3px;
+    height: 40px;
+    overflow: hidden;
+    width: fit-content;
+}
+
+.google-signin-clip #googleSigninButton {
+    margin: -2px -10px;
+}
+
+.profile {
+    align-items: center;
+    display: flex;
+    gap: 16px;
+    margin-top: 16px;
+}
+
+.profile img {
+    border: 1px solid var(--outline);
+    border-radius: 50%;
+    height: 64px;
+    object-fit: cover;
+    width: 64px;
+}
+
+#profileName {
+    color: var(--text);
+    font: 500 17px/24px Inter, sans-serif;
+    letter-spacing: 0;
+    text-transform: none;
+}
+
+#profileEmail {
+    color: var(--muted);
+}
+
+.status-line {
+    color: var(--primary);
+    font: 500 11px/16px "JetBrains Mono", monospace;
+    text-transform: uppercase;
+}
+
+#signOut {
+    align-self: end;
+    margin-top: auto;
+    width: 100%;
+}
+
+.sync-actions {
+    display: grid;
+    gap: 8px;
+    margin-top: auto;
+}
+
+#connectDrive {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #002c70;
+    font-weight: 700;
+}
+
+#disconnectDrive {
+    background: transparent;
+    border-color: transparent;
+    color: var(--danger);
+}
+
+.manual-sync {
+    border-top: 1px solid var(--outline);
+    display: grid;
+    gap: 12px;
+    margin-top: 8px;
+    padding-top: 18px;
+}
+
+.manual-sync-header {
+    display: grid;
+    gap: 6px;
+}
+
+.manual-sync-header h2 {
+    margin: 0;
+}
+
+#lastSynced, #manualSyncStatus {
+    color: var(--muted);
+    font: 500 11px/16px "JetBrains Mono", monospace;
+}
+
+.sync-mode {
+    display: grid;
+    gap: 6px;
+}
+
+.sync-mode span {
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.manual-sync-actions {
+    display: grid;
+    gap: 8px;
+}
+
+.manual-sync-actions button {
+    justify-content: center;
+}
+
+#syncNow {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #002c70;
+    font-weight: 700;
+}
+
+@media (max-width: 760px) {
+    .login-app {
+        grid-template-columns: 1fr;
+        padding-top: 72px;
+    }
+
+    .login-panel {
+        border-bottom: 8px solid var(--outline);
+        border-right: 1px solid var(--outline);
+    }
+
+    .sync-panel {
+        border-left: 1px solid var(--outline);
+        border-top: 8px solid var(--outline);
+    }
+}
