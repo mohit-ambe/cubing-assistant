@@ -4,22 +4,28 @@ import os
 import secrets
 import threading
 import time
-from email.utils import formatdate
-from http.cookies import SimpleCookie
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError
-from urllib.parse import parse_qs, quote, urlencode, urlparse
-from urllib.request import Request, urlopen
+from urllib.parse import quote, urlencode
+from urllib.request import Request as UrlRequest
+from urllib.request import urlopen
+
+import uvicorn
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 
 ROOT = Path(__file__).resolve().parent
-LOCAL_DIR = ROOT / ".local"
+DEFAULT_DATA_DIR = Path("/tmp/cubing-assistant") if os.environ.get("VERCEL") else ROOT / ".local"
+LOCAL_DIR = Path(os.environ.get("CUBING_ASSISTANT_DATA_DIR", DEFAULT_DATA_DIR))
 TOKENS_FILE = LOCAL_DIR / "google_tokens.json"
 SESSIONS_FILE = LOCAL_DIR / "sessions.json"
 DRIVE_FILENAME = "cubing-assistant-data.json"
 SESSION_COOKIE = "cubing_assistant_session"
 SESSION_FILE_VERSION = 2
 SESSION_LOCK = threading.RLock()
+MAX_JSON_BODY_BYTES = 2_000_000
 
 
 def load_dotenv():
@@ -68,6 +74,7 @@ def write_json_file(path, payload):
         path.parent.chmod(0o700)
     except OSError:
         pass
+
     temp_path = path.with_suffix(".tmp")
     temp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     try:
@@ -79,6 +86,10 @@ def write_json_file(path, payload):
         path.chmod(0o600)
     except OSError:
         pass
+
+
+def session_storage_key(session_id):
+    return hashlib.sha256(session_id.encode("utf-8")).hexdigest()
 
 
 def load_sessions():
@@ -100,6 +111,7 @@ def load_sessions():
             continue
         if not session.get("sub") or expires_at <= 0:
             continue
+
         storage_key = session_storage_key(stored_id) if file_version < 2 else stored_id
         sessions[storage_key] = {
             **session,
@@ -107,6 +119,7 @@ def load_sessions():
             "last_seen_at": last_seen_at,
             "expires_at": expires_at,
         }
+
     if file_version < SESSION_FILE_VERSION and sessions:
         write_json_file(SESSIONS_FILE, {
             "version": SESSION_FILE_VERSION,
@@ -120,10 +133,6 @@ def save_sessions_locked():
         "version": SESSION_FILE_VERSION,
         "sessions": SESSIONS,
     }, )
-
-
-def session_storage_key(session_id):
-    return hashlib.sha256(session_id.encode("utf-8")).hexdigest()
 
 
 def prune_expired_sessions(now=None):
@@ -184,6 +193,7 @@ def lookup_session(session_id, now=None):
 def delete_session(session_id):
     if not session_id:
         return False
+
     storage_key = session_storage_key(session_id)
     with SESSION_LOCK:
         if storage_key not in SESSIONS:
@@ -201,7 +211,7 @@ def google_json(url, *, method="GET", data=None, headers=None):
     request_headers = {
         "Accept": "application/json", **(headers or {})
     }
-    request = Request(url, data=data, method=method, headers=request_headers)
+    request = UrlRequest(url, data=data, method=method, headers=request_headers)
     try:
         with urlopen(request, timeout=15) as response:
             body = response.read().decode("utf-8")
@@ -291,7 +301,7 @@ def read_drive_snapshot(subject):
         }
 
     access_token = refresh_access_token(subject)
-    request = Request(f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media", headers={
+    request = UrlRequest(f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media", headers={
         "Authorization": f"Bearer {access_token}"
     }, )
     try:
@@ -308,21 +318,21 @@ def write_drive_snapshot(subject, snapshot):
     access_token = refresh_access_token(subject)
 
     if file_id:
-        request = Request(f"https://www.googleapis.com/upload/drive/v3/files/{file_id}?uploadType=media", data=content,
-            method="PATCH", headers={
+        request = UrlRequest(f"https://www.googleapis.com/upload/drive/v3/files/{file_id}?uploadType=media",
+            data=content, method="PATCH", headers={
                 "Authorization": f"Bearer {access_token}",
                 "Content-Type": "application/json",
             }, )
     else:
         boundary = f"cubing-assistant-{secrets.token_hex(12)}"
         metadata = json.dumps({
-            "name": DRIVE_FILENAME,
-            "parents": ["appDataFolder"]
-        }).encode("utf-8")
+                                  "name": DRIVE_FILENAME,
+                                  "parents": ["appDataFolder"]
+                              }).encode("utf-8")
         content = (f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n".encode(
             "utf-8") + metadata + f"\r\n--{boundary}\r\nContent-Type: application/json\r\n\r\n".encode(
             "utf-8") + content + f"\r\n--{boundary}--".encode("utf-8"))
-        request = Request("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart", data=content,
+        request = UrlRequest("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart", data=content,
             method="POST", headers={
                 "Authorization": f"Bearer {access_token}",
                 "Content-Type": f"multipart/related; boundary={boundary}",
@@ -356,10 +366,7 @@ def merge_snapshots(left, right, mode="newest"):
         if not solve_id:
             continue
         current = merged_solves.get(solve_id)
-        if not current:
-            merged_solves[solve_id] = solve
-        else:
-            merged_solves[solve_id] = choose_record(current, solve, mode)
+        merged_solves[solve_id] = solve if not current else choose_record(current, solve, mode)
 
     sessions = {}
     for session in [*left.get("sessions", []), *right.get("sessions", [])]:
@@ -367,10 +374,7 @@ def merge_snapshots(left, right, mode="newest"):
         if not session_id:
             continue
         current = sessions.get(session_id)
-        if not current:
-            sessions[session_id] = session
-        else:
-            sessions[session_id] = choose_record(current, session, mode)
+        sessions[session_id] = session if not current else choose_record(current, session, mode)
 
     if mode == "drive":
         session_scramble_indexes = {
@@ -380,6 +384,7 @@ def merge_snapshots(left, right, mode="newest"):
         session_scramble_indexes = {
             **left.get("sessionScrambleIndexes", {}), **right.get("sessionScrambleIndexes", {}),
         }
+
     left_theme = left.get("theme") or {}
     right_theme = right.get("theme") or {}
     theme = choose_record(left_theme, right_theme, mode) if (left_theme or right_theme) else {}
@@ -393,229 +398,239 @@ def merge_snapshots(left, right, mode="newest"):
     }
 
 
-class CubingAssistantHandler(SimpleHTTPRequestHandler):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory=str(ROOT), **kwargs)
+class ApiError(Exception):
+    def __init__(self, message, status_code=400):
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
 
-    def end_headers(self):
-        self.send_header("Cache-Control", "no-store")
-        renewed_session_id = getattr(self, "_renewed_session_id", None)
-        if renewed_session_id:
-            self.send_header("Set-Cookie", self.build_session_cookie(renewed_session_id))
-            self._renewed_session_id = None
-        super().end_headers()
 
-    def request_is_https(self):
-        if SESSION_COOKIE_SECURE in {"1", "true", "yes", "on"}:
-            return True
-        if SESSION_COOKIE_SECURE in {"0", "false", "no", "off"}:
-            return False
-        forwarded_proto = self.headers.get("X-Forwarded-Proto", "").split(",", 1)[0].strip().lower()
-        return forwarded_proto == "https"
+app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
+app.mount("/logo", StaticFiles(directory=ROOT / "logo"), name="logo")
+app.mount("/scramble", StaticFiles(directory=ROOT / "scramble"), name="scramble")
 
-    def build_session_cookie(self, session_id, max_age=SESSION_TTL_SECONDS):
-        parts = [f"{SESSION_COOKIE}={session_id}", "Path=/", "HttpOnly", "SameSite=Lax", f"Max-Age={max_age}",
-            f"Expires={formatdate(time.time() + max_age, usegmt=True)}", ]
-        if self.request_is_https():
-            parts.append("Secure")
-        return "; ".join(parts)
 
-    def do_GET(self):
-        path = urlparse(self.path).path
-        if path == "/api/config":
-            return self.send_json({
-                "googleClientId": GOOGLE_CLIENT_ID
-            })
-        if path == "/api/auth/status":
-            return self.handle_auth_status()
-        if path == "/api/google/status":
-            return self.handle_drive_status()
-        if path == "/api/sync":
-            return self.handle_sync_download()
+@app.exception_handler(ApiError)
+async def handle_api_error(_request, error):
+    return JSONResponse({
+                            "error": error.message
+                        }, status_code=error.status_code)
 
-        if path in {"/", "/timer", "/solve"}:
-            self.path = "/static/index.html"
-        elif path == "/analytics":
-            self.path = "/static/analytics.html"
-        elif path == "/manage":
-            self.path = "/static/manage.html"
-        elif path == "/appearance":
-            self.path = "/static/appearance.html"
-        elif path == "/login":
-            self.path = "/static/login.html"
-        super().do_GET()
 
-    def do_POST(self):
-        path = urlparse(self.path).path
-        if path == "/api/auth/google":
-            return self.handle_google_login()
-        if path == "/api/auth/logout":
-            return self.handle_logout()
-        if path == "/api/google/code":
-            return self.handle_drive_code()
-        if path == "/api/google/disconnect":
-            return self.handle_drive_disconnect()
-        if path == "/api/sync":
-            return self.handle_sync_upload()
-        self.send_error(404)
+@app.middleware("http")
+async def add_response_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["Cache-Control"] = "no-store"
+    renewed_session_id = getattr(request.state, "renewed_session_id", None)
+    if renewed_session_id:
+        set_session_cookie(response, request, renewed_session_id)
+    return response
 
-    def send_json(self, payload, status=200, headers=None):
-        body = json.dumps(payload).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        for key, value in (headers or {}).items():
-            self.send_header(key, value)
-        self.end_headers()
-        self.wfile.write(body)
 
-    def read_json_body(self):
-        length = int(self.headers.get("Content-Length", "0"))
-        if length > 2_000_000:
-            raise ValueError("Request body is too large.")
-        body = self.rfile.read(length).decode("utf-8")
-        return json.loads(body or "{}")
+def request_is_https(request):
+    if SESSION_COOKIE_SECURE in {"1", "true", "yes", "on"}:
+        return True
+    if SESSION_COOKIE_SECURE in {"0", "false", "no", "off"}:
+        return False
+    forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip().lower()
+    return forwarded_proto == "https" or request.url.scheme == "https"
 
-    def get_session(self):
-        cookie = SimpleCookie(self.headers.get("Cookie", ""))
-        morsel = cookie.get(SESSION_COOKIE)
-        session_id = morsel.value if morsel else None
-        session, renewed = lookup_session(session_id)
-        if renewed:
-            self._renewed_session_id = session_id
-        return session
 
-    def require_session(self):
-        session = self.get_session()
-        if not session:
-            self.send_json({
-                "error": "Sign in with Google first."
-            }, 401)
-        return session
+def set_session_cookie(response, request, session_id, max_age=SESSION_TTL_SECONDS):
+    response.set_cookie(key=SESSION_COOKIE, value=session_id, max_age=max_age, expires=max_age, path="/",
+        secure=request_is_https(request), httponly=True, samesite="lax", )
 
-    def handle_google_login(self):
+
+def get_session(request):
+    session_id = request.cookies.get(SESSION_COOKIE)
+    session, renewed = lookup_session(session_id)
+    if renewed:
+        request.state.renewed_session_id = session_id
+    return session
+
+
+def require_session(request):
+    session = get_session(request)
+    if not session:
+        raise ApiError("Sign in with Google first.", 401)
+    return session
+
+
+async def read_json_body(request):
+    content_length = request.headers.get("content-length")
+    if content_length:
         try:
-            credential = self.read_json_body()["credential"]
-            query = urlencode({
-                "id_token": credential
-            })
-            profile = google_json(f"https://oauth2.googleapis.com/tokeninfo?{query}")
-            if profile.get("aud") != GOOGLE_CLIENT_ID:
-                raise RuntimeError("Google token audience did not match this app.")
+            if int(content_length) > MAX_JSON_BODY_BYTES:
+                raise ApiError("Request body is too large.", 413)
+        except ValueError as error:
+            raise ApiError("Invalid Content-Length header.") from error
 
-            cookie = SimpleCookie(self.headers.get("Cookie", ""))
-            existing_session = cookie.get(SESSION_COOKIE)
-            if existing_session:
-                delete_session(existing_session.value)
-            session_id, session = create_session(profile)
-            self.send_json({
-                **session,
-                "driveConnected": bool(get_user_tokens(session["sub"]))
-            }, headers={
-                "Set-Cookie": self.build_session_cookie(session_id)
-            }, )
-        except (KeyError, RuntimeError, ValueError, json.JSONDecodeError) as error:
-            self.send_json({
-                "error": str(error)
-            }, 400)
+    body = await request.body()
+    if len(body) > MAX_JSON_BODY_BYTES:
+        raise ApiError("Request body is too large.", 413)
+    try:
+        return json.loads(body.decode("utf-8") or "{}")
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ApiError("Request body must be valid JSON.") from error
 
-    def handle_auth_status(self):
-        session = self.get_session()
-        if not session:
-            return self.send_json({
-                "signedIn": False
-            })
-        self.send_json({
-            "signedIn": True, **session,
-            "driveConnected": bool(get_user_tokens(session["sub"]))
-        })
 
-    def handle_logout(self):
-        cookie = SimpleCookie(self.headers.get("Cookie", ""))
-        morsel = cookie.get(SESSION_COOKIE)
-        if morsel:
-            delete_session(morsel.value)
-        self.send_json({
-            "ok": True
-        }, headers={
-            "Set-Cookie": self.build_session_cookie("", max_age=0)
+def page_response(filename):
+    return FileResponse(ROOT / "static" / filename)
+
+
+@app.get("/")
+@app.get("/timer")
+@app.get("/solve")
+async def solve_page():
+    return page_response("index.html")
+
+
+@app.get("/analytics")
+async def analytics_page():
+    return page_response("analytics.html")
+
+
+@app.get("/manage")
+async def manage_page():
+    return page_response("manage.html")
+
+
+@app.get("/appearance")
+async def appearance_page():
+    return page_response("appearance.html")
+
+
+@app.get("/login")
+async def login_page():
+    return page_response("login.html")
+
+
+@app.get("/api/config")
+async def config():
+    return {
+        "googleClientId": GOOGLE_CLIENT_ID
+    }
+
+
+@app.get("/api/auth/status")
+async def auth_status(request: Request):
+    session = get_session(request)
+    if not session:
+        return {
+            "signedIn": False
+        }
+    return {
+        "signedIn": True, **session,
+        "driveConnected": bool(get_user_tokens(session["sub"])),
+    }
+
+
+@app.post("/api/auth/google")
+async def google_login(request: Request):
+    payload = await read_json_body(request)
+    try:
+        credential = payload["credential"]
+        query = urlencode({
+                              "id_token": credential
+                          })
+        profile = await run_in_threadpool(google_json, f"https://oauth2.googleapis.com/tokeninfo?{query}", )
+        if profile.get("aud") != GOOGLE_CLIENT_ID:
+            raise RuntimeError("Google token audience did not match this app.")
+
+        existing_session_id = request.cookies.get(SESSION_COOKIE)
+        if existing_session_id:
+            delete_session(existing_session_id)
+        session_id, session = create_session(profile)
+    except (KeyError, RuntimeError, ValueError) as error:
+        raise ApiError(str(error)) from error
+
+    response = JSONResponse({
+        **session,
+        "driveConnected": bool(get_user_tokens(session["sub"])),
+    })
+    set_session_cookie(response, request, session_id)
+    return response
+
+
+@app.post("/api/auth/logout")
+async def logout(request: Request):
+    session_id = request.cookies.get(SESSION_COOKIE)
+    if session_id:
+        delete_session(session_id)
+
+    response = JSONResponse({
+                                "ok": True
+                            })
+    response.delete_cookie(SESSION_COOKIE, path="/", secure=request_is_https(request), httponly=True, samesite="lax", )
+    return response
+
+
+@app.get("/api/google/status")
+async def drive_status(request: Request):
+    session = require_session(request)
+    return {
+        "connected": bool(get_user_tokens(session["sub"]))
+    }
+
+
+@app.post("/api/google/code")
+async def drive_code(request: Request):
+    session = require_session(request)
+    payload = await read_json_body(request)
+    try:
+        code = payload["code"]
+        redirect_uri = request.headers.get("origin") or str(request.base_url).rstrip("/")
+        token_response = await run_in_threadpool(google_form, "https://oauth2.googleapis.com/token", {
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "code": code,
+            "grant_type": "authorization_code",
+            "redirect_uri": redirect_uri,
         }, )
+        store_user_tokens(session["sub"], token_response)
+        return {
+            "connected": True
+        }
+    except (KeyError, RuntimeError, ValueError) as error:
+        raise ApiError(str(error)) from error
 
-    def handle_drive_code(self):
-        session = self.require_session()
-        if not session:
-            return
-        try:
-            code = self.read_json_body()["code"]
-            token_response = google_form("https://oauth2.googleapis.com/token", {
-                "client_id": GOOGLE_CLIENT_ID,
-                "client_secret": GOOGLE_CLIENT_SECRET,
-                "code": code,
-                "grant_type": "authorization_code",
-                "redirect_uri": self.headers.get("Origin", f"http://localhost:{self.server.server_port}"),
-            }, )
-            store_user_tokens(session["sub"], token_response)
-            self.send_json({
-                "connected": True
-            })
-        except (KeyError, RuntimeError, ValueError, json.JSONDecodeError) as error:
-            self.send_json({
-                "error": str(error)
-            }, 400)
 
-    def handle_drive_status(self):
-        session = self.require_session()
-        if not session:
-            return
-        self.send_json({
-            "connected": bool(get_user_tokens(session["sub"]))
-        })
+@app.post("/api/google/disconnect")
+async def drive_disconnect(request: Request):
+    session = require_session(request)
+    delete_user_tokens(session["sub"])
+    return {
+        "connected": False
+    }
 
-    def handle_drive_disconnect(self):
-        session = self.require_session()
-        if not session:
-            return
-        delete_user_tokens(session["sub"])
-        self.send_json({
-            "connected": False
-        })
 
-    def handle_sync_download(self):
-        session = self.require_session()
-        if not session:
-            return
-        try:
-            self.send_json(read_drive_snapshot(session["sub"]))
-        except RuntimeError as error:
-            self.send_json({
-                "error": str(error)
-            }, 400)
+@app.get("/api/sync")
+async def sync_download(request: Request):
+    session = require_session(request)
+    try:
+        return await run_in_threadpool(read_drive_snapshot, session["sub"])
+    except RuntimeError as error:
+        raise ApiError(str(error)) from error
 
-    def handle_sync_upload(self):
-        session = self.require_session()
-        if not session:
-            return
-        try:
-            mode = parse_qs(urlparse(self.path).query).get("mode", ["newest"])[0]
-            if mode not in {"newest", "local", "drive"}:
-                mode = "newest"
-            incoming = self.read_json_body()
-            remote = read_drive_snapshot(session["sub"])
-            merged = merge_snapshots(remote, incoming, mode)
-            write_drive_snapshot(session["sub"], merged)
-            self.send_json(merged)
-        except (RuntimeError, ValueError, json.JSONDecodeError) as error:
-            self.send_json({
-                "error": str(error)
-            }, 400)
+
+@app.post("/api/sync")
+async def sync_upload(request: Request, mode: str = "newest"):
+    session = require_session(request)
+    if mode not in {"newest", "local", "drive"}:
+        mode = "newest"
+    incoming = await read_json_body(request)
+    try:
+        remote = await run_in_threadpool(read_drive_snapshot, session["sub"])
+        merged = merge_snapshots(remote, incoming, mode)
+        await run_in_threadpool(write_drive_snapshot, session["sub"], merged)
+        return merged
+    except RuntimeError as error:
+        raise ApiError(str(error)) from error
 
 
 def main():
-    host = "127.0.0.1"
-    port = 8000
-    server = ThreadingHTTPServer((host, port), CubingAssistantHandler)
-    print(f"Serving cubing timer at http://localhost:{port}")
-    server.serve_forever()
+    uvicorn.run("server:app", host="127.0.0.1", port=8000, reload=False)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,6 @@
+.env
+.git/
+.idea/
+.local/
+__pycache__/
+test_*.py
