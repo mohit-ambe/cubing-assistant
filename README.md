@@ -1,0 +1,1 @@
+![](logo%2Flogo_dark.png)
