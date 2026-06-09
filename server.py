@@ -21,7 +21,8 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 ROOT = Path(__file__).resolve().parent
-DEFAULT_DATA_DIR = Path("/tmp/cubing-assistant") if os.environ.get("VERCEL") else ROOT / ".local"
+IS_VERCEL = bool(os.environ.get("VERCEL"))
+DEFAULT_DATA_DIR = Path("/tmp/cubing-assistant") if IS_VERCEL else ROOT / ".local"
 LOCAL_DIR = Path(os.environ.get("CUBING_ASSISTANT_DATA_DIR", DEFAULT_DATA_DIR))
 TOKENS_FILE = LOCAL_DIR / "google_tokens.json"
 SESSIONS_FILE = LOCAL_DIR / "sessions.json"
@@ -53,10 +54,21 @@ SUPABASE_SECRET = os.environ.get("SUPABASE_SECRET", "").strip()
 TOKEN_ENCRYPTION_KEY = os.environ.get("TOKEN_ENCRYPTION_KEY", "")
 SUPABASE_ENABLED = bool(SUPABASE_URL and SUPABASE_SECRET)
 
+
+class PersistentStorageError(RuntimeError):
+    pass
+
+
 if bool(SUPABASE_URL) != bool(SUPABASE_SECRET):
     raise RuntimeError("SUPABASE_URL and SUPABASE_SECRET must be configured together.")
 if SUPABASE_ENABLED and not TOKEN_ENCRYPTION_KEY:
     raise RuntimeError("TOKEN_ENCRYPTION_KEY is required when Supabase storage is enabled.")
+
+
+def require_persistent_auth_storage():
+    if IS_VERCEL and not SUPABASE_ENABLED:
+        raise PersistentStorageError("Persistent authentication is not configured. Set SUPABASE_URL, "
+                                     "SUPABASE_SECRET, and TOKEN_ENCRYPTION_KEY for this Vercel environment, then redeploy.")
 
 
 def read_positive_int_env(name, default, minimum):
@@ -222,6 +234,7 @@ def prune_expired_sessions(now=None):
 
 
 def create_session(profile, now=None):
+    require_persistent_auth_storage()
     now = int(time.time() if now is None else now)
     session_id = secrets.token_urlsafe(32)
     session = {
@@ -255,6 +268,7 @@ def create_session(profile, now=None):
 
 
 def lookup_session(session_id, now=None):
+    require_persistent_auth_storage()
     if not session_id:
         return None, False
 
@@ -614,7 +628,10 @@ def set_session_cookie(response, request, session_id, max_age=SESSION_TTL_SECOND
 
 async def get_session(request):
     session_id = request.cookies.get(SESSION_COOKIE)
-    session, renewed = await run_in_threadpool(lookup_session, session_id)
+    try:
+        session, renewed = await run_in_threadpool(lookup_session, session_id)
+    except PersistentStorageError as error:
+        raise ApiError(str(error), 503) from error
     if renewed:
         request.state.renewed_session_id = session_id
     return session
@@ -679,7 +696,45 @@ async def login_page():
 @app.get("/api/config")
 async def config():
     return {
-        "googleClientId": GOOGLE_CLIENT_ID
+        "googleClientId": GOOGLE_CLIENT_ID,
+        "storageBackend": "supabase" if SUPABASE_ENABLED else "local",
+        "persistentAuthConfigured": SUPABASE_ENABLED,
+    }
+
+
+@app.get("/api/storage/status")
+async def storage_status():
+    if not SUPABASE_ENABLED:
+        return JSONResponse({
+            "backend": "local",
+            "configured": False,
+            "reachable": not IS_VERCEL,
+            "message": (
+                "Supabase environment variables are missing from this Vercel deployment." if IS_VERCEL else "Using local JSON storage."),
+        }, status_code=503 if IS_VERCEL else 200, )
+
+    try:
+        await run_in_threadpool(supabase_request, "auth_sessions", query={
+            "select": "session_hash",
+            "limit": "1"
+        }, )
+        await run_in_threadpool(supabase_request, "google_tokens", query={
+            "select": "google_sub",
+            "limit": "1"
+        }, )
+    except RuntimeError as error:
+        return JSONResponse({
+            "backend": "supabase",
+            "configured": True,
+            "reachable": False,
+            "message": str(error),
+        }, status_code=503, )
+
+    return {
+        "backend": "supabase",
+        "configured": True,
+        "reachable": True,
+        "message": "Supabase authentication storage is available.",
     }
 
 
@@ -713,6 +768,8 @@ async def google_login(request: Request):
         if existing_session_id:
             await run_in_threadpool(delete_session, existing_session_id)
         session_id, session = await run_in_threadpool(create_session, profile)
+    except PersistentStorageError as error:
+        raise ApiError(str(error), 503) from error
     except (KeyError, RuntimeError, ValueError) as error:
         raise ApiError(str(error)) from error
 
