@@ -1,3 +1,5 @@
+import base64
+import binascii
 import hashlib
 import json
 import os
@@ -5,12 +7,14 @@ import secrets
 import threading
 import time
 from pathlib import Path
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request as UrlRequest
 from urllib.request import urlopen
 
 import uvicorn
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -44,6 +48,15 @@ def load_dotenv():
 load_dotenv()
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
+SUPABASE_SECRET = os.environ.get("SUPABASE_SECRET", "").strip()
+TOKEN_ENCRYPTION_KEY = os.environ.get("TOKEN_ENCRYPTION_KEY", "")
+SUPABASE_ENABLED = bool(SUPABASE_URL and SUPABASE_SECRET)
+
+if bool(SUPABASE_URL) != bool(SUPABASE_SECRET):
+    raise RuntimeError("SUPABASE_URL and SUPABASE_SECRET must be configured together.")
+if SUPABASE_ENABLED and not TOKEN_ENCRYPTION_KEY:
+    raise RuntimeError("TOKEN_ENCRYPTION_KEY is required when Supabase storage is enabled.")
 
 
 def read_positive_int_env(name, default, minimum):
@@ -86,6 +99,59 @@ def write_json_file(path, payload):
         path.chmod(0o600)
     except OSError:
         pass
+
+
+def supabase_request(table, *, method="GET", query=None, payload=None, prefer=None):
+    if not SUPABASE_ENABLED:
+        raise RuntimeError("Supabase storage is not configured.")
+
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    if query:
+        url = f"{url}?{urlencode(query, safe='(),.*')}"
+
+    data = None
+    headers = {
+        "Accept": "application/json",
+        "apikey": SUPABASE_SECRET,
+    }
+    if not SUPABASE_SECRET.startswith("sb_secret_"):
+        headers["Authorization"] = f"Bearer {SUPABASE_SECRET}"
+    if payload is not None:
+        data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    if prefer:
+        headers["Prefer"] = prefer
+
+    request = UrlRequest(url, data=data, method=method, headers=headers)
+    try:
+        with urlopen(request, timeout=15) as response:
+            body = response.read().decode("utf-8")
+            return json.loads(body) if body else None
+    except HTTPError as error:
+        body = error.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Supabase request failed ({error.code}): {body}") from error
+    except URLError as error:
+        raise RuntimeError(f"Supabase request failed: {error.reason}") from error
+
+
+def token_cipher():
+    key = hashlib.sha256(TOKEN_ENCRYPTION_KEY.encode("utf-8")).digest()
+    return AESGCM(key)
+
+
+def encrypt_refresh_token(subject, refresh_token):
+    nonce = secrets.token_bytes(12)
+    ciphertext = token_cipher().encrypt(nonce, refresh_token.encode("utf-8"), subject.encode("utf-8"))
+    return base64.urlsafe_b64encode(nonce + ciphertext).decode("ascii")
+
+
+def decrypt_refresh_token(subject, encrypted_token):
+    try:
+        value = base64.urlsafe_b64decode(encrypted_token.encode("ascii"))
+        plaintext = token_cipher().decrypt(value[:12], value[12:], subject.encode("utf-8"))
+        return plaintext.decode("utf-8")
+    except (binascii.Error, InvalidTag, ValueError, UnicodeDecodeError) as error:
+        raise RuntimeError("Stored Google authorization could not be decrypted.") from error
 
 
 def session_storage_key(session_id):
@@ -137,9 +203,16 @@ def save_sessions_locked():
 
 def prune_expired_sessions(now=None):
     now = int(time.time() if now is None else now)
+    if SUPABASE_ENABLED:
+        deleted = supabase_request("auth_sessions", method="DELETE", query={
+            "expires_at": f"lte.{now}",
+            "select": "session_hash"
+        }, prefer="return=representation", )
+        return len(deleted or [])
+
     with SESSION_LOCK:
         expired_ids = [session_id for session_id, session in SESSIONS.items() if
-            int(session.get("expires_at", 0)) <= now]
+                       int(session.get("expires_at", 0)) <= now]
         if not expired_ids:
             return 0
         for session_id in expired_ids:
@@ -160,9 +233,24 @@ def create_session(profile, now=None):
         "last_seen_at": now,
         "expires_at": now + SESSION_TTL_SECONDS,
     }
-    with SESSION_LOCK:
-        SESSIONS[session_storage_key(session_id)] = session
-        save_sessions_locked()
+    storage_key = session_storage_key(session_id)
+    if SUPABASE_ENABLED:
+        supabase_request("auth_sessions", method="POST", query={
+            "on_conflict": "session_hash"
+        }, payload={
+            "session_hash": storage_key,
+            "google_sub": session["sub"],
+            "name": session["name"],
+            "email": session["email"],
+            "picture": session["picture"],
+            "created_at": session["created_at"],
+            "last_seen_at": session["last_seen_at"],
+            "expires_at": session["expires_at"],
+        }, prefer="resolution=merge-duplicates,return=minimal", )
+    else:
+        with SESSION_LOCK:
+            SESSIONS[storage_key] = session
+            save_sessions_locked()
     return session_id, session.copy()
 
 
@@ -172,6 +260,41 @@ def lookup_session(session_id, now=None):
 
     now = int(time.time() if now is None else now)
     storage_key = session_storage_key(session_id)
+    if SUPABASE_ENABLED:
+        rows = supabase_request("auth_sessions", query={
+            "session_hash": f"eq.{storage_key}",
+            "select": "google_sub,name,email,picture,created_at,last_seen_at,expires_at",
+            "limit": "1",
+        }, )
+        if not rows:
+            return None, False
+
+        row = rows[0]
+        session = {
+            "sub": row["google_sub"],
+            "name": row.get("name") or "",
+            "email": row.get("email") or "",
+            "picture": row.get("picture") or "",
+            "created_at": int(row["created_at"]),
+            "last_seen_at": int(row["last_seen_at"]),
+            "expires_at": int(row["expires_at"]),
+        }
+        if session["expires_at"] <= now:
+            delete_session(session_id)
+            return None, False
+
+        renewed = now - session["last_seen_at"] >= SESSION_RENEW_AFTER_SECONDS
+        if renewed:
+            session["last_seen_at"] = now
+            session["expires_at"] = now + SESSION_TTL_SECONDS
+            supabase_request("auth_sessions", method="PATCH", query={
+                "session_hash": f"eq.{storage_key}"
+            }, payload={
+                "last_seen_at": session["last_seen_at"],
+                "expires_at": session["expires_at"],
+            }, prefer="return=minimal", )
+        return session, renewed
+
     with SESSION_LOCK:
         session = SESSIONS.get(storage_key)
         if not session:
@@ -195,6 +318,13 @@ def delete_session(session_id):
         return False
 
     storage_key = session_storage_key(session_id)
+    if SUPABASE_ENABLED:
+        deleted = supabase_request("auth_sessions", method="DELETE", query={
+            "session_hash": f"eq.{storage_key}",
+            "select": "session_hash"
+        }, prefer="return=representation", )
+        return bool(deleted)
+
     with SESSION_LOCK:
         if storage_key not in SESSIONS:
             return False
@@ -203,8 +333,9 @@ def delete_session(session_id):
         return True
 
 
-SESSIONS = load_sessions()
-prune_expired_sessions()
+SESSIONS = {} if SUPABASE_ENABLED else load_sessions()
+if not SUPABASE_ENABLED:
+    prune_expired_sessions()
 
 
 def google_json(url, *, method="GET", data=None, headers=None):
@@ -236,25 +367,64 @@ def save_tokens(tokens):
 
 
 def get_user_tokens(subject):
+    if SUPABASE_ENABLED:
+        rows = supabase_request("google_tokens", query={
+            "google_sub": f"eq.{subject}",
+            "select": "refresh_token_ciphertext,scope,updated_at",
+            "limit": "1",
+        }, )
+        if not rows:
+            return None
+        row = rows[0]
+        try:
+            refresh_token = decrypt_refresh_token(subject, row["refresh_token_ciphertext"])
+        except RuntimeError:
+            supabase_request("google_tokens", method="DELETE", query={
+                "google_sub": f"eq.{subject}"
+            }, prefer="return=minimal", )
+            return None
+        return {
+            "refresh_token": refresh_token,
+            "scope": row.get("scope") or "",
+            "updated_at": int(row["updated_at"]),
+        }
     return load_tokens().get(subject)
 
 
 def store_user_tokens(subject, token_response):
-    tokens = load_tokens()
-    existing = tokens.get(subject, {})
+    existing = get_user_tokens(subject) or {}
     refresh_token = token_response.get("refresh_token") or existing.get("refresh_token")
     if not refresh_token:
         raise RuntimeError("Google did not return a refresh token. Revoke access and connect Drive again.")
 
-    tokens[subject] = {
+    stored = {
         "refresh_token": refresh_token,
         "scope": token_response.get("scope", existing.get("scope", "")),
         "updated_at": int(time.time() * 1000),
     }
+    if SUPABASE_ENABLED:
+        supabase_request("google_tokens", method="POST", query={
+            "on_conflict": "google_sub"
+        }, payload={
+            "google_sub": subject,
+            "refresh_token_ciphertext": encrypt_refresh_token(subject, stored["refresh_token"]),
+            "scope": stored["scope"],
+            "updated_at": stored["updated_at"],
+        }, prefer="resolution=merge-duplicates,return=minimal", )
+        return
+
+    tokens = load_tokens()
+    tokens[subject] = stored
     save_tokens(tokens)
 
 
 def delete_user_tokens(subject):
+    if SUPABASE_ENABLED:
+        supabase_request("google_tokens", method="DELETE", query={
+            "google_sub": f"eq.{subject}"
+        }, prefer="return=minimal", )
+        return
+
     tokens = load_tokens()
     if subject in tokens:
         del tokens[subject]
@@ -285,7 +455,7 @@ def drive_request(subject, url, *, method="GET", data=None, headers=None):
 def find_drive_snapshot(subject):
     query = quote(f"name = '{DRIVE_FILENAME}'")
     response = drive_request(subject,
-        f"https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q={query}&fields=files(id,name)", )
+                             f"https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q={query}&fields=files(id,name)", )
     files = response.get("files", [])
     return files[0]["id"] if files else None
 
@@ -319,21 +489,21 @@ def write_drive_snapshot(subject, snapshot):
 
     if file_id:
         request = UrlRequest(f"https://www.googleapis.com/upload/drive/v3/files/{file_id}?uploadType=media",
-            data=content, method="PATCH", headers={
+                             data=content, method="PATCH", headers={
                 "Authorization": f"Bearer {access_token}",
                 "Content-Type": "application/json",
             }, )
     else:
         boundary = f"cubing-assistant-{secrets.token_hex(12)}"
         metadata = json.dumps({
-                                  "name": DRIVE_FILENAME,
-                                  "parents": ["appDataFolder"]
-                              }).encode("utf-8")
+            "name": DRIVE_FILENAME,
+            "parents": ["appDataFolder"]
+        }).encode("utf-8")
         content = (f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n".encode(
             "utf-8") + metadata + f"\r\n--{boundary}\r\nContent-Type: application/json\r\n\r\n".encode(
             "utf-8") + content + f"\r\n--{boundary}--".encode("utf-8"))
         request = UrlRequest("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart", data=content,
-            method="POST", headers={
+                             method="POST", headers={
                 "Authorization": f"Bearer {access_token}",
                 "Content-Type": f"multipart/related; boundary={boundary}",
             }, )
@@ -414,8 +584,8 @@ app.mount("/scramble", StaticFiles(directory=ROOT / "scramble"), name="scramble"
 @app.exception_handler(ApiError)
 async def handle_api_error(_request, error):
     return JSONResponse({
-                            "error": error.message
-                        }, status_code=error.status_code)
+        "error": error.message
+    }, status_code=error.status_code)
 
 
 @app.middleware("http")
@@ -439,19 +609,19 @@ def request_is_https(request):
 
 def set_session_cookie(response, request, session_id, max_age=SESSION_TTL_SECONDS):
     response.set_cookie(key=SESSION_COOKIE, value=session_id, max_age=max_age, expires=max_age, path="/",
-        secure=request_is_https(request), httponly=True, samesite="lax", )
+                        secure=request_is_https(request), httponly=True, samesite="lax", )
 
 
-def get_session(request):
+async def get_session(request):
     session_id = request.cookies.get(SESSION_COOKIE)
-    session, renewed = lookup_session(session_id)
+    session, renewed = await run_in_threadpool(lookup_session, session_id)
     if renewed:
         request.state.renewed_session_id = session_id
     return session
 
 
-def require_session(request):
-    session = get_session(request)
+async def require_session(request):
+    session = await get_session(request)
     if not session:
         raise ApiError("Sign in with Google first.", 401)
     return session
@@ -515,14 +685,15 @@ async def config():
 
 @app.get("/api/auth/status")
 async def auth_status(request: Request):
-    session = get_session(request)
+    session = await get_session(request)
     if not session:
         return {
             "signedIn": False
         }
+    drive_connected = await run_in_threadpool(get_user_tokens, session["sub"])
     return {
         "signedIn": True, **session,
-        "driveConnected": bool(get_user_tokens(session["sub"])),
+        "driveConnected": bool(drive_connected),
     }
 
 
@@ -532,22 +703,23 @@ async def google_login(request: Request):
     try:
         credential = payload["credential"]
         query = urlencode({
-                              "id_token": credential
-                          })
+            "id_token": credential
+        })
         profile = await run_in_threadpool(google_json, f"https://oauth2.googleapis.com/tokeninfo?{query}", )
         if profile.get("aud") != GOOGLE_CLIENT_ID:
             raise RuntimeError("Google token audience did not match this app.")
 
         existing_session_id = request.cookies.get(SESSION_COOKIE)
         if existing_session_id:
-            delete_session(existing_session_id)
-        session_id, session = create_session(profile)
+            await run_in_threadpool(delete_session, existing_session_id)
+        session_id, session = await run_in_threadpool(create_session, profile)
     except (KeyError, RuntimeError, ValueError) as error:
         raise ApiError(str(error)) from error
 
+    drive_connected = await run_in_threadpool(get_user_tokens, session["sub"])
     response = JSONResponse({
         **session,
-        "driveConnected": bool(get_user_tokens(session["sub"])),
+        "driveConnected": bool(drive_connected),
     })
     set_session_cookie(response, request, session_id)
     return response
@@ -557,26 +729,27 @@ async def google_login(request: Request):
 async def logout(request: Request):
     session_id = request.cookies.get(SESSION_COOKIE)
     if session_id:
-        delete_session(session_id)
+        await run_in_threadpool(delete_session, session_id)
 
     response = JSONResponse({
-                                "ok": True
-                            })
+        "ok": True
+    })
     response.delete_cookie(SESSION_COOKIE, path="/", secure=request_is_https(request), httponly=True, samesite="lax", )
     return response
 
 
 @app.get("/api/google/status")
 async def drive_status(request: Request):
-    session = require_session(request)
+    session = await require_session(request)
+    connected = await run_in_threadpool(get_user_tokens, session["sub"])
     return {
-        "connected": bool(get_user_tokens(session["sub"]))
+        "connected": bool(connected)
     }
 
 
 @app.post("/api/google/code")
 async def drive_code(request: Request):
-    session = require_session(request)
+    session = await require_session(request)
     payload = await read_json_body(request)
     try:
         code = payload["code"]
@@ -588,7 +761,7 @@ async def drive_code(request: Request):
             "grant_type": "authorization_code",
             "redirect_uri": redirect_uri,
         }, )
-        store_user_tokens(session["sub"], token_response)
+        await run_in_threadpool(store_user_tokens, session["sub"], token_response)
         return {
             "connected": True
         }
@@ -598,8 +771,8 @@ async def drive_code(request: Request):
 
 @app.post("/api/google/disconnect")
 async def drive_disconnect(request: Request):
-    session = require_session(request)
-    delete_user_tokens(session["sub"])
+    session = await require_session(request)
+    await run_in_threadpool(delete_user_tokens, session["sub"])
     return {
         "connected": False
     }
@@ -607,7 +780,7 @@ async def drive_disconnect(request: Request):
 
 @app.get("/api/sync")
 async def sync_download(request: Request):
-    session = require_session(request)
+    session = await require_session(request)
     try:
         return await run_in_threadpool(read_drive_snapshot, session["sub"])
     except RuntimeError as error:
@@ -616,7 +789,7 @@ async def sync_download(request: Request):
 
 @app.post("/api/sync")
 async def sync_upload(request: Request, mode: str = "newest"):
-    session = require_session(request)
+    session = await require_session(request)
     if mode not in {"newest", "local", "drive"}:
         mode = "newest"
     incoming = await read_json_body(request)

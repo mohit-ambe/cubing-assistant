@@ -1,9 +1,19 @@
 const READY_DELAY_MS = 500;
 const STORAGE_KEY = "cubingAssistant.timerState";
 const LAYOUT_STORAGE_KEY = "cubingAssistant.layout";
-const AUTO_SYNC_STORAGE_KEY = "cubingAssistant.lastAutoSync";
+const LAST_SYNC_STORAGE_KEY = "cubingAssistant.lastAutoSync";
 const SYNC_DEBOUNCE_MS = 1500;
 const PLAYGROUND_SESSION_ID = "playground";
+const MOUSE_ONLY_NAVIGATION_SELECTOR = [
+    "button",
+    "select",
+    "a",
+    "[role='separator']",
+    ".scramble-panel",
+    ".times-list",
+    ".average-times",
+    ".scramble-drawing-panel",
+].join(", ");
 
 const EVENTS = [["222", "2x2"], ["333", "3x3"], ["444", "4x4"], ["555", "5x5"], ["666", "6x6"], ["777", "7x7"], ["333oh", "3x3 OH"], ["333bf", "3x3 Blindfolded"], ["333fm", "3x3 Fewest Moves"], ["333mbf", "3x3 Multi-Blind"], ["clock", "Clock"], ["minx", "Megaminx"], ["pyram", "Pyraminx"], ["skewb", "Skewb"], ["sq1", "Square-1"],];
 
@@ -229,19 +239,41 @@ function bindEvents() {
         handle.addEventListener("pointerdown", onScrambleDrawingResizeStart);
     });
 
-    document.querySelectorAll("button, select").forEach(makeMouseOnlyControl);
+    enforceMouseOnlyNavigation();
 }
 
 function onControlKeyDown(event) {
-    if (!event.target.closest("button, select")) return;
-    if (event.code !== "Space" && event.key !== "Tab") return;
+    if (event.key === "Tab") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        return;
+    }
+
+    if (event.code !== "Space") return;
+    if (!event.target.closest(MOUSE_ONLY_NAVIGATION_SELECTOR)) return;
 
     event.preventDefault();
     event.stopImmediatePropagation();
 }
 
+function enforceMouseOnlyNavigation(root = document) {
+    root.querySelectorAll(MOUSE_ONLY_NAVIGATION_SELECTOR).forEach(makeMouseOnlyControl);
+}
+
 function makeMouseOnlyControl(control) {
     control.tabIndex = -1;
+    if (control.dataset.mouseOnlyNavigation === "true") return;
+
+    control.dataset.mouseOnlyNavigation = "true";
+    if (control.matches("button, a, [role='separator']")) {
+        control.addEventListener("mousedown", (event) => event.preventDefault());
+    }
+    if (control.matches(".scramble-panel, .times-list, .average-times")) {
+        control.addEventListener("pointerup", () => control.blur());
+        control.addEventListener("focus", () => {
+            window.requestAnimationFrame(() => control.blur());
+        });
+    }
 }
 
 function onKeyDown(event) {
@@ -394,6 +426,7 @@ function render() {
     renderTimerState();
     renderStats();
     renderTimes();
+    enforceMouseOnlyNavigation();
 }
 
 function renderScrambleFontSize() {
@@ -971,7 +1004,7 @@ async function pullRemoteState() {
         if (!response.ok) throw new Error(remote.error || "Could not download Drive sync data.");
 
         mergeRemoteState(remote);
-        markAutoSyncCompleted();
+        markSyncCompleted();
         saveState();
     } catch {
         // Local solve recording remains available while Drive is disconnected or offline.
@@ -988,7 +1021,7 @@ async function pushRemoteState() {
         if (!response.ok) throw new Error(remote.error || "Could not upload Drive sync data.");
 
         mergeRemoteState(remote);
-        markAutoSyncCompleted();
+        markSyncCompleted();
         localStorage.setItem(STORAGE_KEY, JSON.stringify(createStoredState()));
     } catch {
         // The next local mutation or page load retries synchronization.
@@ -1000,8 +1033,8 @@ function flushSyncWithBeacon() {
     navigator.sendBeacon("/api/sync", JSON.stringify(createSyncSnapshot()));
 }
 
-function markAutoSyncCompleted() {
-    localStorage.setItem(AUTO_SYNC_STORAGE_KEY, String(Date.now()));
+function markSyncCompleted() {
+    localStorage.setItem(LAST_SYNC_STORAGE_KEY, String(Date.now()));
 }
 
 function createSyncSnapshot() {

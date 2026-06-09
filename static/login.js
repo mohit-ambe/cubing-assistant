@@ -1,6 +1,6 @@
 const PROFILE_STORAGE_KEY = "cubingAssistant.googleProfile";
 const TIMER_STORAGE_KEY = "cubingAssistant.timerState";
-const AUTO_SYNC_STORAGE_KEY = "cubingAssistant.lastAutoSync";
+const LAST_SYNC_STORAGE_KEY = "cubingAssistant.lastAutoSync";
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.appdata";
 const PLAYGROUND_SESSION_ID = "playground";
 
@@ -33,6 +33,12 @@ disconnectDriveEl.addEventListener("click", disconnectDrive);
 syncNowEl.addEventListener("click", syncNow);
 uploadLocalEl.addEventListener("click", uploadLocalData);
 downloadDriveEl.addEventListener("click", downloadFromDrive);
+window.addEventListener("storage", (event) => {
+    if (event.key === LAST_SYNC_STORAGE_KEY) {
+        renderLastSynced();
+    }
+});
+window.addEventListener("focus", renderLastSynced);
 init();
 
 async function init() {
@@ -226,6 +232,7 @@ async function runManualSync(workingMessage, action) {
 
     try {
         const message = await action();
+        markSyncCompleted();
         manualSyncStatusEl.textContent = message;
     } catch (error) {
         manualSyncStatusEl.textContent = error.message;
@@ -239,6 +246,10 @@ function setManualSyncBusy(isBusy) {
     [syncNowEl, uploadLocalEl, downloadDriveEl, conflictModeEl].forEach((control) => {
         control.disabled = isBusy || !profile || !driveConnected;
     });
+}
+
+function markSyncCompleted() {
+    localStorage.setItem(LAST_SYNC_STORAGE_KEY, String(Date.now()));
 }
 
 async function postSnapshot(snapshot, mode = "newest") {
@@ -329,10 +340,10 @@ function readStoredTimerState() {
 }
 
 function renderLastSynced() {
-    const timestamp = Number(localStorage.getItem(AUTO_SYNC_STORAGE_KEY) || 0);
-    lastSyncedEl.textContent = timestamp ? `Auto Sync Time: ${new Intl.DateTimeFormat(undefined, {
+    const timestamp = Number(localStorage.getItem(LAST_SYNC_STORAGE_KEY) || 0);
+    lastSyncedEl.textContent = timestamp ? `Last Sync Time: ${new Intl.DateTimeFormat(undefined, {
         month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
-    }).format(new Date(timestamp))}` : "Auto Sync Time: Never";
+    }).format(new Date(timestamp))}` : "Last Sync Time: Never";
 }
 
 function setProfile(nextProfile) {
