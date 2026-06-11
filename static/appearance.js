@@ -1,4 +1,5 @@
 const STORAGE_KEY = "cubingAssistant.timerState";
+const ACCOUNT_SWITCH_RESOLVED_STORAGE_KEY = "cubingAssistant.accountSwitchResolved";
 const MODE_STORAGE_KEY = "cubingAssistant.appearanceMode";
 const STITCH_DEFAULT_THEME = {
     "--bg": "#121314",
@@ -18,6 +19,12 @@ const STITCH_DEFAULT_THEME = {
     "--lavender": "#c7a7ff",
 };
 const DEFAULT_THEME = STITCH_DEFAULT_THEME;
+
+window.addEventListener("storage", (event) => {
+    if (event.key === ACCOUNT_SWITCH_RESOLVED_STORAGE_KEY) {
+        window.location.reload();
+    }
+});
 const THEME_FIELDS = [["--text", "Font"], ["--bg", "Background"], ["--surface-low", "Board"], ["--surface-high", "Button"], ["--primary", "Accent"], ["--muted", "Subtext"], ["--surface", "Subtext background"], ["--ready", "PBs"], ["--outline", "Borders"], ["--danger", "Danger"],];
 const THEME_PRESETS = [["Default", {
     dark: STITCH_DEFAULT_THEME, light: {
@@ -335,6 +342,7 @@ function saveTheme() {
 }
 
 async function pushRemoteTheme() {
+    if (localStorage.getItem("cubingAssistant.pendingAccountSwitch")) return;
     try {
         const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
         await fetch("/api/sync", {

@@ -2,6 +2,8 @@ const READY_DELAY_MS = 500;
 const STORAGE_KEY = "cubingAssistant.timerState";
 const LAYOUT_STORAGE_KEY = "cubingAssistant.layout";
 const LAST_SYNC_STORAGE_KEY = "cubingAssistant.lastAutoSync";
+const ACCOUNT_SWITCH_STORAGE_KEY = "cubingAssistant.pendingAccountSwitch";
+const ACCOUNT_SWITCH_RESOLVED_STORAGE_KEY = "cubingAssistant.accountSwitchResolved";
 const SYNC_DEBOUNCE_MS = 1500;
 const PLAYGROUND_SESSION_ID = "playground";
 const MOUSE_ONLY_NAVIGATION_SELECTOR = [
@@ -121,6 +123,11 @@ function bindEvents() {
     document.addEventListener("touchend", onTouchEnd, {passive: false});
     document.addEventListener("touchcancel", onTouchEnd, {passive: false});
     window.addEventListener("pagehide", flushSyncWithBeacon);
+    window.addEventListener("storage", (event) => {
+        if (event.key === ACCOUNT_SWITCH_RESOLVED_STORAGE_KEY) {
+            window.location.reload();
+        }
+    });
 
     scrambleEl.addEventListener("dblclick", () => {
         copyScrambleText(getCurrentScramble());
@@ -1000,12 +1007,13 @@ function updateSolvePenalty(solveId, penalty) {
 }
 
 function scheduleSync() {
-    if (!state.syncReady) return;
+    if (!state.syncReady || isAccountSwitchPending()) return;
     window.clearTimeout(state.syncTimeout);
     state.syncTimeout = window.setTimeout(pushRemoteState, SYNC_DEBOUNCE_MS);
 }
 
 async function pullRemoteState() {
+    if (isAccountSwitchPending()) return;
     try {
         const response = await fetch("/api/sync");
         if (response.status === 401) return;
@@ -1021,6 +1029,7 @@ async function pullRemoteState() {
 }
 
 async function pushRemoteState() {
+    if (isAccountSwitchPending()) return;
     try {
         const response = await fetch("/api/sync", {
             method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(createSyncSnapshot()),
@@ -1038,12 +1047,16 @@ async function pushRemoteState() {
 }
 
 function flushSyncWithBeacon() {
-    if (!state.syncReady || !navigator.sendBeacon) return;
+    if (!state.syncReady || isAccountSwitchPending() || !navigator.sendBeacon) return;
     navigator.sendBeacon("/api/sync", JSON.stringify(createSyncSnapshot()));
 }
 
 function markSyncCompleted() {
     localStorage.setItem(LAST_SYNC_STORAGE_KEY, String(Date.now()));
+}
+
+function isAccountSwitchPending() {
+    return Boolean(localStorage.getItem(ACCOUNT_SWITCH_STORAGE_KEY));
 }
 
 function createSyncSnapshot() {

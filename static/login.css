@@ -308,6 +308,116 @@ header {
     font-weight: 700;
 }
 
+.account-switch-dialog {
+    background: var(--surface-low);
+    border: 1px solid var(--outline);
+    color: var(--text);
+    max-width: min(560px, calc(100vw - 32px));
+    padding: 0;
+    width: 100%;
+}
+
+.account-switch-dialog::backdrop {
+    background: rgba(0, 0, 0, .72);
+}
+
+.account-switch-content {
+    display: grid;
+    gap: 20px;
+    padding: 24px;
+}
+
+.account-switch-heading {
+    align-items: start;
+    display: flex;
+    gap: 12px;
+}
+
+.account-switch-heading > .material-symbols-outlined {
+    color: var(--primary);
+    font-size: 26px;
+}
+
+.account-switch-heading div {
+    display: grid;
+    gap: 8px;
+}
+
+.account-switch-heading h2 {
+    color: var(--text);
+    font: 700 18px/24px Inter, sans-serif;
+    letter-spacing: 0;
+    text-transform: none;
+}
+
+.account-switch-comparison {
+    border-bottom: 1px solid var(--outline);
+    border-top: 1px solid var(--outline);
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.account-switch-comparison > div {
+    display: grid;
+    gap: 6px;
+    padding: 16px;
+}
+
+.account-switch-comparison > div + div {
+    border-left: 1px solid var(--outline);
+}
+
+.account-switch-comparison span {
+    color: var(--muted);
+    font-size: 11px;
+}
+
+.account-switch-comparison strong {
+    color: var(--text);
+    font: 500 13px/20px "JetBrains Mono", monospace;
+}
+
+.account-switch-note {
+    font-size: 12px;
+}
+
+.account-switch-backup {
+    align-items: center;
+    color: var(--text);
+    cursor: pointer;
+    display: flex;
+    font-size: 12px;
+    gap: 10px;
+}
+
+.account-switch-backup input {
+    accent-color: var(--primary);
+    height: 16px;
+    margin: 0;
+    width: 16px;
+}
+
+.account-switch-backup:has(input:disabled) {
+    cursor: default;
+    opacity: .55;
+}
+
+.account-switch-actions {
+    display: grid;
+    gap: 8px;
+}
+
+.account-switch-primary {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #002c70;
+    font-weight: 700;
+}
+
+.account-switch-cancel {
+    background: transparent;
+}
+
 @media (max-width: 760px) {
     .login-app {
         grid-template-columns: 1fr;
@@ -322,5 +432,14 @@ header {
     .sync-panel {
         border-left: 1px solid var(--outline);
         border-top: 8px solid var(--outline);
+    }
+
+    .account-switch-comparison {
+        grid-template-columns: 1fr;
+    }
+
+    .account-switch-comparison > div + div {
+        border-left: 0;
+        border-top: 1px solid var(--outline);
     }
 }

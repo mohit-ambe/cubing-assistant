@@ -96,6 +96,42 @@
     </section>
 </main>
 
+<dialog class="account-switch-dialog" id="accountSwitchDialog">
+    <div class="account-switch-content">
+        <div class="account-switch-heading">
+            <span aria-hidden="true" class="material-symbols-outlined">switch_account</span>
+            <div>
+                <h2>Google account changed</h2>
+                <p id="accountSwitchMessage"></p>
+            </div>
+        </div>
+        <div class="account-switch-comparison">
+            <div>
+                <span>This browser</span>
+                <strong id="browserDataSummary">Loading...</strong>
+            </div>
+            <div>
+                <span id="newAccountLabel">New Google account</span>
+                <strong id="accountDataSummary">Loading...</strong>
+            </div>
+        </div>
+        <p class="account-switch-note" id="accountSwitchNote">
+            Automatic and manual synchronization are paused until you choose.
+        </p>
+        <label class="account-switch-backup">
+            <input id="downloadAccountSwitchBackup" type="checkbox">
+            <span>Download a backup before changing data</span>
+        </label>
+        <div class="account-switch-actions">
+            <button class="account-switch-primary" disabled id="useAccountData" type="button">
+                Use new account data
+            </button>
+            <button disabled id="mergeAccountData" type="button">Merge both</button>
+            <button class="account-switch-cancel" id="cancelAccountSwitch" type="button">Cancel</button>
+        </div>
+    </div>
+</dialog>
+
 <script src="/static/login.js"></script>
 </body>
 </html>

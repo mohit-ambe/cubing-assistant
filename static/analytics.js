@@ -1,4 +1,6 @@
 const STORAGE_KEY = "cubingAssistant.timerState";
+const ACCOUNT_SWITCH_STORAGE_KEY = "cubingAssistant.pendingAccountSwitch";
+const ACCOUNT_SWITCH_RESOLVED_STORAGE_KEY = "cubingAssistant.accountSwitchResolved";
 
 const EVENTS = [["222", "2x2"], ["333", "3x3"], ["444", "4x4"], ["555", "5x5"], ["666", "6x6"], ["777", "7x7"], ["333oh", "3x3 OH"], ["333bf", "3x3 Blindfolded"], ["333fm", "3x3 Fewest Moves"], ["333mbf", "3x3 Multi-Blind"], ["clock", "Clock"], ["minx", "Megaminx"], ["pyram", "Pyraminx"], ["skewb", "Skewb"], ["sq1", "Square-1"],];
 
@@ -17,6 +19,12 @@ const eventChartEl = document.querySelector("#eventChart");
 const state = {
     solves: [],
 };
+
+window.addEventListener("storage", (event) => {
+    if (event.key === ACCOUNT_SWITCH_RESOLVED_STORAGE_KEY) {
+        window.location.reload();
+    }
+});
 
 init();
 
@@ -75,6 +83,7 @@ function renderEventOptions() {
 }
 
 async function pullRemoteState() {
+    if (localStorage.getItem(ACCOUNT_SWITCH_STORAGE_KEY)) return;
     try {
         const response = await fetch("/api/sync");
         if (response.status === 401) return;
