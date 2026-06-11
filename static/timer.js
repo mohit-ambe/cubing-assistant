@@ -1,4 +1,7 @@
 const READY_DELAY_MS = 500;
+const INSPECTION_DURATION_MS = 15_000;
+const INSPECTION_HOLD_THRESHOLD_MS = 7_000;
+const INSPECTION_DANGER_THRESHOLD_MS = 3_000;
 const STORAGE_KEY = "cubingAssistant.timerState";
 const LAYOUT_STORAGE_KEY = "cubingAssistant.layout";
 const LAST_SYNC_STORAGE_KEY = "cubingAssistant.lastAutoSync";
@@ -10,6 +13,7 @@ const MOUSE_ONLY_NAVIGATION_SELECTOR = [
     "button",
     "select",
     "a",
+    ".toolbar-switch",
     "[role='separator']",
     ".scramble-panel",
     ".times-list",
@@ -26,6 +30,9 @@ const scrambleMetaEl = document.querySelector(".scramble-meta");
 const timerPanelEl = document.querySelector(".timer-panel");
 const timerEl = document.querySelector("#timer");
 const statusEl = document.querySelector("#status");
+const inspectionEnabledEl = document.querySelector("#inspectionEnabled");
+const drawingEnabledEl = document.querySelector("#drawingEnabled");
+const timerUpdateMsEl = document.querySelector("#timerUpdateMs");
 const scrambleEl = document.querySelector("#scramble");
 const scrambleDrawingEl = document.querySelector("#scrambleDrawing");
 const scrambleDrawingPanelEl = document.querySelector(".scramble-drawing-panel");
@@ -48,6 +55,7 @@ const confirmClearTimesEl = document.querySelector("#confirmClearTimes");
 const createSessionDialogEl = document.querySelector("#createSessionDialog");
 const newSessionNameEl = document.querySelector("#newSessionName");
 const newSessionEventEl = document.querySelector("#newSessionEvent");
+const newSessionSplitsEl = document.querySelector("#newSessionSplits");
 const confirmCreateSessionEl = document.querySelector("#confirmCreateSession");
 const averageDialogEl = document.querySelector("#averageDialog");
 const averageDialogTitleEl = document.querySelector("#averageDialogTitle");
@@ -70,7 +78,13 @@ const state = {
     lastDisplayMs: 0,
     holdTimeout: null,
     animationFrame: null,
+    inspectionAnimationFrame: null,
+    inspectionDeadline: 0,
+    inspectionEnabled: false,
+    drawingEnabled: true,
+    timerUpdateMs: 10,
     touchIdentifier: null,
+    phaseTimesMs: [],
     redoSolveId: null,
     redoScramble: "",
     scrambleFontSize: 1.9,
@@ -134,7 +148,7 @@ function bindEvents() {
     });
 
     sessionSelectEl.addEventListener("change", async () => {
-        if (state.timerState === "running") {
+        if (state.timerState === "running" || isInspectionState()) {
             sessionSelectEl.value = state.activeSessionId;
             return;
         }
@@ -143,9 +157,10 @@ function bindEvents() {
     });
 
     createSessionEl.addEventListener("click", () => {
-        if (state.timerState === "running") return;
+        if (state.timerState === "running" || isInspectionState()) return;
         newSessionNameEl.value = "";
         newSessionEventEl.value = state.activeEvent;
+        newSessionSplitsEl.value = "0";
         createSessionDialogEl.showModal();
     });
 
@@ -155,7 +170,7 @@ function bindEvents() {
     });
 
     eventSelectEl.addEventListener("change", async () => {
-        if (state.timerState === "running") {
+        if (state.timerState === "running" || isInspectionState()) {
             eventSelectEl.value = state.activeEvent;
             return;
         }
@@ -164,7 +179,7 @@ function bindEvents() {
     });
 
     randomScrambleEl.addEventListener("click", () => {
-        if (state.timerState === "running" || state.scrambles.length === 0) return;
+        if (state.timerState === "running" || isInspectionState() || state.scrambles.length === 0) return;
         cancelRedo();
         setScrambleIndex(getRandomScrambleIndex());
         state.lastDisplayMs = 0;
@@ -186,10 +201,29 @@ function bindEvents() {
         syncScrambleMinHeight();
     });
 
+    inspectionEnabledEl.addEventListener("change", () => {
+        state.inspectionEnabled = inspectionEnabledEl.checked;
+        saveState();
+        renderTimerState();
+    });
+
+    drawingEnabledEl.addEventListener("change", () => {
+        state.drawingEnabled = drawingEnabledEl.checked;
+        saveState();
+        renderScrambleDrawingVisibility();
+    });
+
+    timerUpdateMsEl.addEventListener("change", () => {
+        state.timerUpdateMs = normalizeTimerUpdateMs(timerUpdateMsEl.value);
+        timerUpdateMsEl.value = String(state.timerUpdateMs);
+        saveState();
+        renderTimerState();
+    });
+
     exportTimesEl.addEventListener("click", exportActiveSession);
 
     clearTimesEl.addEventListener("click", () => {
-        if (state.timerState === "running") return;
+        if (state.timerState === "running" || isInspectionState()) return;
         clearConfirmDialogEl.showModal();
     });
 
@@ -199,7 +233,7 @@ function bindEvents() {
 
     statsBodyEl.addEventListener("click", (event) => {
         const button = event.target.closest("button[data-stat-average]");
-        if (!button || state.timerState === "running") return;
+        if (!button || state.timerState === "running" || isInspectionState()) return;
         showAverageDialog(button.dataset.statAverage, button.dataset.statColumn);
     });
 
@@ -212,7 +246,7 @@ function bindEvents() {
 
     timesListEl.addEventListener("click", (event) => {
         const button = event.target.closest("button[data-action]");
-        if (!button || state.timerState === "running") {
+        if (!button || state.timerState === "running" || isInspectionState()) {
             return;
         }
 
@@ -233,6 +267,12 @@ function bindEvents() {
     });
 
     timesListEl.addEventListener("dblclick", (event) => {
+        const phaseHeader = event.target.closest("[data-phase-index]");
+        if (phaseHeader) {
+            editPhaseName(phaseHeader);
+            return;
+        }
+
         const scramble = event.target.closest(".time-scramble");
         if (!scramble) return;
 
@@ -257,7 +297,7 @@ function onControlKeyDown(event) {
         return;
     }
 
-    if (event.target.closest(".times-list") && KEYBOARD_SCROLL_KEYS.has(event.code)) {
+    if (!isTextEntryTarget(event.target) && event.target.closest(".times-list") && KEYBOARD_SCROLL_KEYS.has(event.code)) {
         event.preventDefault();
         event.stopImmediatePropagation();
         return;
@@ -298,15 +338,20 @@ function onKeyDown(event) {
 
     if (state.timerState === "running") {
         event.preventDefault();
-        stopTimer();
+        recordPhaseOrStop();
         return;
     }
 
     if (isInteractiveTarget(event.target)) return;
 
-    if (event.key === "Enter" && (state.timerState === "holding" || state.timerState === "ready")) {
+    if (event.key === "Enter" && (
+        state.timerState === "holding"
+        || state.timerState === "ready"
+        || isInspectionState()
+    )) {
         event.preventDefault();
-        cancelTimerReadying();
+        if (isInspectionState()) cancelInspection();
+        else cancelTimerReadying();
         return;
     }
 
@@ -345,7 +390,19 @@ function onTouchEnd(event) {
 
 function pressTimer() {
     if (state.timerState === "running") {
-        stopTimer();
+        recordPhaseOrStop();
+        return;
+    }
+
+    if (isInspectionState()) {
+        if (state.timerState !== "inspection") return;
+        state.timerState = "inspection-holding";
+        state.holdTimeout = window.setTimeout(() => {
+            if (state.timerState !== "inspection-holding") return;
+            state.timerState = "inspection-ready";
+            renderTimerState();
+        }, READY_DELAY_MS);
+        renderTimerState();
         return;
     }
 
@@ -366,6 +423,19 @@ function pressTimer() {
 }
 
 function releaseTimer() {
+    if (state.timerState === "inspection-holding") {
+        clearHoldTimeout();
+        state.timerState = "inspection";
+        renderTimerState();
+        return;
+    }
+
+    if (state.timerState === "inspection-ready") {
+        clearHoldTimeout();
+        startTimer();
+        return;
+    }
+
     if (state.timerState === "holding") {
         cancelTimerReadying();
         return;
@@ -373,7 +443,8 @@ function releaseTimer() {
 
     if (state.timerState === "ready") {
         clearHoldTimeout();
-        startTimer();
+        if (state.inspectionEnabled) beginInspection();
+        else startTimer();
     }
 }
 
@@ -390,16 +461,85 @@ function resetTimerDisplay() {
 }
 
 function startTimer() {
+    clearInspection();
     state.timerState = "running";
     state.startTime = performance.now();
     state.elapsedMs = 0;
     state.lastDisplayMs = 0;
+    state.phaseTimesMs = [];
     renderTimerState();
     tick();
 }
 
-function stopTimer() {
-    state.elapsedMs = performance.now() - state.startTime;
+function beginInspection() {
+    clearHoldTimeout();
+    clearInspection();
+    state.timerState = "inspection";
+    state.inspectionDeadline = performance.now() + INSPECTION_DURATION_MS;
+    renderTimerState();
+    renderInspectionCountdown();
+}
+
+function renderInspectionCountdown() {
+    if (!isInspectionState()) return;
+
+    const remaining = Math.max(0, state.inspectionDeadline - performance.now());
+    timerEl.className = `timer ${getInspectionColorClass(remaining)}`;
+    timerEl.textContent = formatTime(remaining);
+    inspectionEnabledEl.disabled = true;
+
+    if (remaining <= 0) {
+        startTimer();
+        return;
+    }
+
+    state.inspectionAnimationFrame = requestAnimationFrame(renderInspectionCountdown);
+}
+
+function getInspectionColorClass(remaining) {
+    if (remaining <= INSPECTION_DANGER_THRESHOLD_MS) return "inspection-danger";
+    if (remaining <= INSPECTION_HOLD_THRESHOLD_MS) return "inspection-hold";
+    return "inspection-ready";
+}
+
+function isInspectionState() {
+    return state.timerState === "inspection"
+        || state.timerState === "inspection-holding"
+        || state.timerState === "inspection-ready";
+}
+
+function clearInspection() {
+    cancelAnimationFrame(state.inspectionAnimationFrame);
+    state.inspectionAnimationFrame = null;
+    state.inspectionDeadline = 0;
+}
+
+function cancelInspection() {
+    clearHoldTimeout();
+    clearInspection();
+    state.timerState = "idle";
+    renderTimerState();
+}
+
+function recordPhaseOrStop() {
+    const phaseCount = getActivePhaseCount();
+    if (!phaseCount) {
+        stopTimer();
+        return;
+    }
+
+    const elapsed = performance.now() - state.startTime;
+    const previousTotal = state.phaseTimesMs.reduce((sum, value) => sum + value, 0);
+    state.phaseTimesMs.push(Math.max(0, Math.round(elapsed) - previousTotal));
+    if (state.phaseTimesMs.length >= phaseCount) {
+        stopTimer(elapsed);
+    } else {
+        renderTimerState();
+    }
+}
+
+function stopTimer(elapsed = performance.now() - state.startTime) {
+    state.elapsedMs = elapsed;
     state.lastDisplayMs = state.elapsedMs;
     state.timerState = "idle";
     cancelAnimationFrame(state.animationFrame);
@@ -413,6 +553,7 @@ function stopTimer() {
         createdAt: Date.now(),
         updatedAt: Date.now(),
         penalty: "OK",
+        ...(state.phaseTimesMs.length ? {phaseTimesMs: [...state.phaseTimesMs]} : {}),
     };
 
     if (state.redoSolveId) {
@@ -431,18 +572,34 @@ function tick() {
     if (state.timerState !== "running") return;
 
     state.elapsedMs = performance.now() - state.startTime;
-    timerEl.textContent = formatTime(state.elapsedMs);
+    renderRunningTimerValue(state.elapsedMs);
     state.animationFrame = requestAnimationFrame(tick);
+}
+
+function renderRunningTimerValue(elapsed) {
+    if (state.timerUpdateMs === 0) {
+        timerEl.textContent = "Solve!";
+        return;
+    }
+
+    const displayedElapsed = Math.floor(elapsed / state.timerUpdateMs) * state.timerUpdateMs;
+    timerEl.textContent = formatTime(displayedElapsed);
 }
 
 function render() {
     renderScrambleFontSize();
     renderScramble();
+    renderScrambleDrawingVisibility();
     syncScrambleMinHeight();
     renderTimerState();
     renderStats();
     renderTimes();
     enforceMouseOnlyNavigation();
+}
+
+function renderScrambleDrawingVisibility() {
+    drawingEnabledEl.checked = state.drawingEnabled;
+    scrambleDrawingPanelEl.hidden = !state.drawingEnabled;
 }
 
 function renderScrambleFontSize() {
@@ -494,9 +651,15 @@ function renderSessionEventControl() {
 async function createSession() {
     const event = getValidEventId(newSessionEventEl.value);
     const name = newSessionNameEl.value.trim() || `${getEventLabel(event)} session`;
+    const phaseCount = readPhaseCount(newSessionSplitsEl.value);
     const now = Date.now();
     const session = {
-        id: crypto.randomUUID(), name, event, createdAt: now, updatedAt: now,
+        id: crypto.randomUUID(),
+        name,
+        event,
+        createdAt: now,
+        updatedAt: now,
+        ...(phaseCount ? {phaseCount} : {}),
     };
 
     state.sessions.push(session);
@@ -589,10 +752,33 @@ function syncScrambleMinHeight() {
 }
 
 function renderTimerState() {
+    inspectionEnabledEl.checked = state.inspectionEnabled;
+    inspectionEnabledEl.disabled = state.timerState !== "idle";
+    timerUpdateMsEl.disabled = state.timerState !== "idle";
+    if (document.activeElement !== timerUpdateMsEl) {
+        timerUpdateMsEl.value = String(state.timerUpdateMs);
+    }
+
+    if (isInspectionState()) {
+        const remaining = Math.max(0, state.inspectionDeadline - performance.now());
+        timerEl.className = `timer ${getInspectionColorClass(remaining)}`;
+        timerEl.textContent = formatTime(remaining);
+        statusEl.textContent = state.timerState === "inspection-ready"
+            ? "Release to start"
+            : state.timerState === "inspection-holding"
+                ? "Keep holding"
+                : "Inspect";
+        return;
+    }
+
     timerEl.className = `timer ${state.timerState}`;
 
     if (state.timerState === "running") {
-        statusEl.textContent = "Press any key or tap to stop";
+        renderRunningTimerValue(state.elapsedMs);
+        const phaseCount = getActivePhaseCount();
+        statusEl.textContent = phaseCount
+            ? `Solving ${getPhaseName(getActiveSession(), state.phaseTimesMs.length)} (${state.phaseTimesMs.length + 1} of ${phaseCount})`
+            : "Press any key or tap to stop";
         return;
     }
 
@@ -658,6 +844,7 @@ function renderTimes() {
     timesListEl.replaceChildren();
     const activeSolves = getActiveSolves();
     const personalBestSolveIds = getRollingPersonalBestSolveIds(activeSolves);
+    const phaseCount = getActivePhaseCount();
 
     if (activeSolves.length === 0) {
         const empty = document.createElement("li");
@@ -667,9 +854,29 @@ function renderTimes() {
         return;
     }
 
+    if (phaseCount) {
+        const header = document.createElement("li");
+        header.className = "time-columns-header";
+        header.style.setProperty("--phase-count", String(phaseCount));
+        ["#", "Time"].forEach((label) => {
+            const cell = document.createElement("span");
+            cell.textContent = label;
+            header.append(cell);
+        });
+        for (let phase = 0; phase < phaseCount; phase += 1) {
+            const cell = document.createElement("span");
+            cell.dataset.phaseIndex = String(phase);
+            cell.title = "Double-click to rename";
+            cell.textContent = getPhaseName(getActiveSession(), phase);
+            header.append(cell);
+        }
+        timesListEl.append(header);
+    }
+
     activeSolves.forEach((solve, index) => {
         const item = document.createElement("li");
-        item.className = "time-entry";
+        item.className = `time-entry${phaseCount ? " split-time-entry" : ""}`;
+        if (phaseCount) item.style.setProperty("--phase-count", String(phaseCount));
         item.dataset.solveId = solve.id;
         if (solve.id === state.redoSolveId) {
             item.classList.add("redo-active");
@@ -682,7 +889,8 @@ function renderTimes() {
         }
 
         const row = document.createElement("div");
-        row.className = "time-row";
+        row.className = `time-row${phaseCount ? " split-time-row" : ""}`;
+        if (phaseCount) row.style.setProperty("--phase-count", String(phaseCount));
 
         const solveNumber = document.createElement("span");
         solveNumber.className = "time-index";
@@ -693,6 +901,16 @@ function renderTimes() {
         value.textContent = formatSolveTime(solve);
 
         row.append(solveNumber, value);
+
+        if (phaseCount) {
+            for (let phase = 0; phase < phaseCount; phase += 1) {
+                const phaseValue = document.createElement("span");
+                phaseValue.className = "phase-time-value";
+                const phaseTime = Number(solve.phaseTimesMs?.[phase]);
+                phaseValue.textContent = Number.isFinite(phaseTime) ? formatTime(phaseTime) : "--";
+                row.append(phaseValue);
+            }
+        }
 
         const penaltyBadge = createPenaltyBadge(solve);
         if (penaltyBadge) {
@@ -853,6 +1071,9 @@ function loadSavedState() {
         })) : [];
         state.lastDisplayMs = Number(saved.lastDisplayMs) || 0;
         state.scrambleFontSize = clamp(Number(saved.scrambleFontSize) || 1.9, 0.9, 3.2);
+        state.inspectionEnabled = Boolean(saved.inspectionEnabled);
+        state.drawingEnabled = saved.drawingEnabled !== false;
+        state.timerUpdateMs = normalizeTimerUpdateMs(saved.timerUpdateMs);
         state.theme = saved.theme || {};
     } catch {
         localStorage.removeItem(STORAGE_KEY);
@@ -888,6 +1109,64 @@ function getSolveEvent(solve) {
 
 function getSolveSessionId(solve) {
     return solve.sessionId || PLAYGROUND_SESSION_ID;
+}
+
+function readPhaseCount(value) {
+    const count = Math.floor(Number(value) || 0);
+    return count >= 1 ? Math.min(count, 20) : 0;
+}
+
+function getActivePhaseCount() {
+    return readPhaseCount(getActiveSession()?.phaseCount);
+}
+
+function getPhaseName(session, phaseIndex) {
+    const savedName = session?.phaseNames?.[phaseIndex];
+    return typeof savedName === "string" && savedName.trim() ? savedName.trim() : `P${phaseIndex + 1}`;
+}
+
+function editPhaseName(cell) {
+    if (cell.querySelector("input") || state.timerState === "running") return;
+    const phaseIndex = Number(cell.dataset.phaseIndex);
+    if (!Number.isInteger(phaseIndex)) return;
+    const session = getActiveSession();
+    if (session.id === PLAYGROUND_SESSION_ID) return;
+
+    const originalName = getPhaseName(session, phaseIndex);
+    const input = document.createElement("input");
+    input.className = "phase-name-input";
+    input.maxLength = 24;
+    input.value = originalName;
+    cell.replaceChildren(input);
+    input.focus();
+    input.select();
+
+    let finished = false;
+    const finish = (save) => {
+        if (finished) return;
+        finished = true;
+        const nextName = input.value.trim();
+        if (save) {
+            const phaseNames = Array.isArray(session.phaseNames) ? [...session.phaseNames] : [];
+            phaseNames[phaseIndex] = nextName && nextName !== `P${phaseIndex + 1}` ? nextName : null;
+            while (phaseNames.length && !phaseNames[phaseNames.length - 1]) phaseNames.pop();
+            if (phaseNames.length) session.phaseNames = phaseNames;
+            else delete session.phaseNames;
+            session.updatedAt = Date.now();
+            saveState();
+        }
+        cell.textContent = save ? getPhaseName(session, phaseIndex) : originalName;
+    };
+    input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+            event.preventDefault();
+            finish(true);
+        } else if (event.key === "Escape") {
+            event.preventDefault();
+            finish(false);
+        }
+    });
+    input.addEventListener("blur", () => finish(true));
 }
 
 function getScrambleIndexKey() {
@@ -961,6 +1240,7 @@ function replaceRedoneSolve(newSolve) {
         ...previousSolve,
         timeMs: newSolve.timeMs,
         penalty: newSolve.penalty,
+        phaseTimesMs: newSolve.phaseTimesMs,
         scramble: previousSolve.scramble,
         redoneAt: Date.now(),
         updatedAt: Date.now(),
@@ -1075,6 +1355,9 @@ function createStoredState() {
         solves: state.solves,
         lastDisplayMs: state.lastDisplayMs,
         scrambleFontSize: state.scrambleFontSize,
+        inspectionEnabled: state.inspectionEnabled,
+        drawingEnabled: state.drawingEnabled,
+        timerUpdateMs: state.timerUpdateMs,
         theme: state.theme,
     };
 }
@@ -1410,6 +1693,12 @@ function loadLayout() {
 
 function clamp(value, min, max) {
     return Math.min(Math.max(value, min), max);
+}
+
+function normalizeTimerUpdateMs(value) {
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) return 10;
+    return Math.round(clamp(numericValue, 0, 60_000));
 }
 
 function buildStats() {

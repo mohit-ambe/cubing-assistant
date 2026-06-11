@@ -162,6 +162,7 @@ button[data-action="delete"]:hover {
 
 .scramble-meta {
     border-bottom: 1px solid rgba(67, 70, 83, .45);
+    gap: 8px;
     justify-content: space-between;
     min-height: 48px;
     padding: 6px 16px;
@@ -188,7 +189,6 @@ button[data-action="delete"]:hover {
 
 .event-picker {
     gap: 16px;
-    margin-right: auto;
 }
 
 .event-picker > span {
@@ -202,7 +202,6 @@ button[data-action="delete"]:hover {
 .fixed-event-label {
     color: var(--primary);
     font: 500 12px/16px "JetBrains Mono", monospace;
-    margin-right: auto;
     padding: 7px 10px;
 }
 
@@ -309,6 +308,92 @@ button[data-action="delete"]:hover {
     position: relative;
 }
 
+.toolbar-switches {
+    align-items: center;
+    display: flex;
+    gap: 14px;
+    margin-right: auto;
+}
+
+.toolbar-switch {
+    align-items: center;
+    color: var(--muted);
+    cursor: pointer;
+    display: flex;
+    font: 500 12px/16px "JetBrains Mono", monospace;
+    gap: 8px;
+    white-space: nowrap;
+}
+
+.toolbar-switch input {
+    height: 1px;
+    opacity: 0;
+    position: absolute;
+    width: 1px;
+}
+
+.toolbar-switch-track {
+    border: 1px solid var(--outline);
+    border-radius: 10px;
+    height: 18px;
+    position: relative;
+    width: 34px;
+}
+
+.toolbar-switch-track::after {
+    background: var(--muted);
+    border-radius: 50%;
+    content: "";
+    height: 12px;
+    left: 2px;
+    position: absolute;
+    top: 2px;
+    transition: background 140ms ease, transform 140ms ease;
+    width: 12px;
+}
+
+.toolbar-switch input:checked + .toolbar-switch-track {
+    border-color: var(--primary);
+}
+
+.toolbar-switch input:checked + .toolbar-switch-track::after {
+    background: var(--primary);
+    transform: translateX(16px);
+}
+
+.toolbar-switch:has(input:disabled) {
+    cursor: default;
+    opacity: .55;
+}
+
+.timer-update-field {
+    align-items: center;
+    color: var(--muted);
+    display: flex;
+    font: 500 12px/16px "JetBrains Mono", monospace;
+    gap: 7px;
+    white-space: nowrap;
+}
+
+.timer-update-field input {
+    background: var(--surface-high);
+    border: 1px solid var(--outline);
+    border-radius: 3px;
+    color: var(--text);
+    font: 500 12px/16px "JetBrains Mono", monospace;
+    padding: .35rem .45rem;
+    width: 5rem;
+}
+
+.timer-update-field input:focus {
+    border-color: var(--primary);
+    outline: none;
+}
+
+.timer-update-field:has(input:disabled) {
+    opacity: .55;
+}
+
 .timer {
     color: var(--text);
     font: 700 clamp(4.5rem, 11vw, 9rem)/1 "JetBrains Mono", monospace;
@@ -325,9 +410,21 @@ button[data-action="delete"]:hover {
     color: var(--ready);
 }
 
+.timer.inspection-ready {
+    color: var(--ready);
+}
+
+.timer.inspection-hold {
+    color: var(--hold);
+}
+
+.timer.inspection-danger {
+    color: var(--danger);
+}
+
 .status {
     color: var(--muted);
-    font: 500 12px/16px "JetBrains Mono", monospace;
+    font: 500 16px/20px "JetBrains Mono", monospace;
     letter-spacing: .18em;
     margin-top: 24px;
     min-height: 16px;
@@ -545,6 +642,55 @@ scramble-display {
     padding: 8px 16px;
 }
 
+.time-columns-header, .split-time-row {
+    display: grid;
+    grid-template-columns: 32px minmax(6rem, 1.2fr) repeat(var(--phase-count), minmax(4.5rem, 1fr));
+    min-width: max-content;
+}
+
+.time-columns-header {
+    background: var(--surface-low);
+    border-bottom: 1px solid var(--outline);
+    color: var(--muted);
+    font: 500 10px/16px "JetBrains Mono", monospace;
+    gap: 16px;
+    padding: 6px 16px;
+    position: sticky;
+    text-transform: uppercase;
+    top: 0;
+    z-index: 1;
+}
+
+.time-columns-header [data-phase-index] {
+    cursor: text;
+    min-width: 0;
+}
+
+.phase-name-input {
+    background: var(--surface);
+    border: 1px solid var(--primary);
+    color: var(--text);
+    font: inherit;
+    min-width: 0;
+    padding: 2px 4px;
+    text-transform: none;
+    width: 100%;
+}
+
+.split-time-entry {
+    min-width: calc(9rem + var(--phase-count) * 6rem);
+}
+
+.split-time-row {
+    gap: 16px;
+}
+
+.phase-time-value {
+    align-self: center;
+    font: 500 15px/22px "JetBrains Mono", monospace;
+    white-space: nowrap;
+}
+
 .time-entry:hover {
     background: rgba(52, 53, 54, .65);
 }
@@ -599,6 +745,15 @@ scramble-display {
 
 .time-actions, .penalty-actions {
     gap: 4px;
+}
+
+.time-actions {
+    flex: 1 1 100%;
+    width: 100%;
+}
+
+.penalty-actions {
+    flex: 1 1 auto;
 }
 
 .time-actions button {

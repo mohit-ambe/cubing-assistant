@@ -47,6 +47,23 @@
                 <select aria-label="Scramble type" id="eventSelect"></select>
             </label>
             <span class="fixed-event-label" hidden id="fixedEventLabel"></span>
+            <div class="toolbar-switches">
+                <label class="toolbar-switch">
+                    <input id="inspectionEnabled" type="checkbox">
+                    <span aria-hidden="true" class="toolbar-switch-track"></span>
+                    <span>Inspection</span>
+                </label>
+                <label class="toolbar-switch">
+                    <input checked id="drawingEnabled" type="checkbox">
+                    <span aria-hidden="true" class="toolbar-switch-track"></span>
+                    <span>Drawing</span>
+                </label>
+                <label class="timer-update-field">
+                    <span>Update (ms)</span>
+                    <input id="timerUpdateMs" inputmode="numeric" max="60000" min="0" step="10" type="number"
+                           value="10">
+                </label>
+            </div>
             <div class="scramble-actions">
                 <span id="scrambleCount">0 / 0</span>
                 <div class="scramble-controls">
@@ -140,6 +157,11 @@
         <label class="dialog-field">
             <span>Cube type</span>
             <select id="newSessionEvent"></select>
+        </label>
+        <label class="dialog-field">
+            <span>Splits</span>
+            <input id="newSessionSplits" inputmode="numeric" max="20" min="0" placeholder="None" type="number"
+                   value="0">
         </label>
         <div class="dialog-actions">
             <button type="submit" value="cancel">Cancel</button>

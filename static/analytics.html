@@ -40,25 +40,34 @@
         </div>
 
         <section aria-label="Analytics filters" class="filters">
-            <label>
-                <span>Event</span>
-                <select id="eventFilter"></select>
+            <select aria-label="Group analytics by" id="scopeFilter">
+                <option value="event">Event</option>
+                <option value="session">Session</option>
+            </select>
+            <select aria-label="Analytics selection" id="scopeValueFilter"></select>
+            <label hidden id="timePartField">
+                <span>Time</span>
+                <select id="timePartFilter">
+                    <option value="final">Final</option>
+                </select>
             </label>
             <label>
                 <span>Range</span>
                 <select id="rangeFilter">
-                    <option value="7">Last 7 days</option>
-                    <option selected value="30">Last 30 days</option>
+                    <option selected value="all">All time</option>
                     <option value="90">Last 90 days</option>
-                    <option value="all">All time</option>
+                    <option value="30">Last month</option>
+                    <option value="7">Last week</option>
+                    <option value="1">Today</option>
+
                 </select>
             </label>
             <label>
                 <span>Rolling</span>
                 <select id="rollingFilter">
+                    <option selected value="100">ao100</option>
+                    <option value="12">ao12</option>
                     <option value="5">ao5</option>
-                    <option selected value="12">ao12</option>
-                    <option value="100">ao100</option>
                 </select>
             </label>
         </section>
@@ -73,6 +82,11 @@
                 <span id="trendMeta"></span>
             </div>
             <div class="chart" id="trendChart"></div>
+            <label class="timeline-switch trend-timeline-switch">
+                <input checked id="dateTimeline" type="checkbox">
+                <span class="timeline-switch-track" aria-hidden="true"></span>
+                <span>Dated</span>
+            </label>
         </article>
 
         <article class="chart-panel distribution-panel">
@@ -86,7 +100,7 @@
         <article class="chart-panel daily-panel">
             <div class="panel-heading">
                 <h2>Solve Count</h2>
-                <span>daily volume</span>
+                <span id="solveCountMeta">daily volume</span>
             </div>
             <div class="chart" id="dailyChart"></div>
         </article>
@@ -94,7 +108,7 @@
         <article class="chart-panel formats-panel">
             <div class="panel-heading">
                 <h2>Formats</h2>
-                <span>median by event</span>
+                <span id="formatsMeta">median by event</span>
             </div>
             <div class="chart" id="eventChart"></div>
         </article>

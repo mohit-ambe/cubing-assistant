@@ -28,6 +28,7 @@ const sessionDialogEl = document.querySelector("#sessionDialog");
 const sessionDialogTitleEl = document.querySelector("#sessionDialogTitle");
 const sessionNameEl = document.querySelector("#sessionName");
 const sessionEventEl = document.querySelector("#sessionEvent");
+const sessionSplitsEl = document.querySelector("#sessionSplits");
 const importDialogEl = document.querySelector("#importDialog");
 const cstimerFileEl = document.querySelector("#cstimerFile");
 const importRowsEl = document.querySelector("#importRows");
@@ -193,6 +194,7 @@ function openCreateDialog() {
     sessionDialogTitleEl.textContent = "New session";
     sessionNameEl.value = "";
     sessionEventEl.value = "333";
+    sessionSplitsEl.value = "0";
     sessionDialogEl.showModal();
 }
 
@@ -201,7 +203,15 @@ function saveCreatedSession(event) {
     const name = sessionNameEl.value.trim();
     if (!name) return;
     const now = Date.now();
-    const session = {id: crypto.randomUUID(), name, event: sessionEventEl.value, createdAt: now, updatedAt: now};
+    const phaseCount = Math.min(20, Math.max(0, Math.floor(Number(sessionSplitsEl.value) || 0)));
+    const session = {
+        id: crypto.randomUUID(),
+        name,
+        event: sessionEventEl.value,
+        createdAt: now,
+        updatedAt: now,
+        ...(phaseCount ? {phaseCount} : {}),
+    };
     state.sessions.push(session);
     state.selectedSessionId = session.id;
     sessionDialogEl.close();

@@ -4,20 +4,27 @@ const ACCOUNT_SWITCH_RESOLVED_STORAGE_KEY = "cubingAssistant.accountSwitchResolv
 
 const EVENTS = [["222", "2x2"], ["333", "3x3"], ["444", "4x4"], ["555", "5x5"], ["666", "6x6"], ["777", "7x7"], ["333oh", "3x3 OH"], ["333bf", "3x3 Blindfolded"], ["333fm", "3x3 Fewest Moves"], ["333mbf", "3x3 Multi-Blind"], ["clock", "Clock"], ["minx", "Megaminx"], ["pyram", "Pyraminx"], ["skewb", "Skewb"], ["sq1", "Square-1"],];
 
-const eventFilterEl = document.querySelector("#eventFilter");
+const scopeFilterEl = document.querySelector("#scopeFilter");
+const scopeValueFilterEl = document.querySelector("#scopeValueFilter");
+const timePartFieldEl = document.querySelector("#timePartField");
+const timePartFilterEl = document.querySelector("#timePartFilter");
+const dateTimelineEl = document.querySelector("#dateTimeline");
 const rangeFilterEl = document.querySelector("#rangeFilter");
 const rollingFilterEl = document.querySelector("#rollingFilter");
 const summaryLineEl = document.querySelector("#summaryLine");
 const statCardsEl = document.querySelector("#statCards");
 const trendMetaEl = document.querySelector("#trendMeta");
 const distributionMetaEl = document.querySelector("#distributionMeta");
+const solveCountMetaEl = document.querySelector("#solveCountMeta");
 const trendChartEl = document.querySelector("#trendChart");
 const distributionChartEl = document.querySelector("#distributionChart");
 const dailyChartEl = document.querySelector("#dailyChart");
 const eventChartEl = document.querySelector("#eventChart");
+const formatsMetaEl = document.querySelector("#formatsMeta");
 
 const state = {
     solves: [],
+    sessions: [],
 };
 
 window.addEventListener("storage", (event) => {
@@ -29,27 +36,42 @@ window.addEventListener("storage", (event) => {
 init();
 
 async function init() {
-    state.solves = loadSolves();
-    renderEventOptions();
+    loadAnalyticsState();
+    renderScopeOptions();
+    renderTimePartOptions();
     bindEvents();
     render();
     await pullRemoteState();
 }
 
 function bindEvents() {
-    [eventFilterEl, rangeFilterEl, rollingFilterEl].forEach((control) => {
+    [timePartFilterEl, rangeFilterEl, rollingFilterEl].forEach((control) => {
         control.addEventListener("change", render);
+    });
+    dateTimelineEl.addEventListener("change", render);
+    scopeFilterEl.addEventListener("change", () => {
+        renderScopeOptions();
+        renderTimePartOptions();
+        render();
+    });
+    scopeValueFilterEl.addEventListener("change", () => {
+        renderTimePartOptions();
+        render();
     });
 }
 
-function loadSolves() {
+function loadAnalyticsState() {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
+    if (!raw) {
+        state.solves = [];
+        state.sessions = [];
+        return;
+    }
 
     try {
         const saved = JSON.parse(raw);
-        if (!Array.isArray(saved.solves)) return [];
-        return saved.solves
+        state.sessions = Array.isArray(saved.sessions) ? saved.sessions : [];
+        state.solves = (Array.isArray(saved.solves) ? saved.solves : [])
             .filter((solve) => !solve.deletedAt && Number.isFinite(Number(solve.timeMs)) && Number.isFinite(Number(solve.createdAt)))
             .map((solve) => ({
                 ...solve,
@@ -60,26 +82,51 @@ function loadSolves() {
             }))
             .sort((a, b) => a.createdAt - b.createdAt);
     } catch {
-        return [];
+        state.solves = [];
+        state.sessions = [];
     }
 }
 
-function renderEventOptions() {
-    const selectedEvent = eventFilterEl.value || "all";
-    const seenEvents = new Set(state.solves.map((solve) => solve.event));
-    const options = [["all", "All events"], ...EVENTS.filter(([eventId]) => seenEvents.has(eventId))];
-    if (options.length === 1) {
-        options.push(["333", "3x3"]);
+function renderScopeOptions() {
+    const selectedValue = scopeValueFilterEl.value || "all";
+    const mode = scopeFilterEl.value;
+    let options;
+    if (mode === "session") {
+        const seenSessionIds = new Set(state.solves.map((solve) => solve.sessionId || "playground"));
+        options = [
+            ["all", "All"],
+            ...state.sessions
+                .filter((session) => !session.deletedAt && seenSessionIds.has(session.id))
+                .map((session) => [session.id, session.name || "Unnamed session"]),
+        ];
+    } else {
+        const seenEvents = new Set(state.solves.map((solve) => solve.event));
+        options = [["all", "All"], ...EVENTS.filter(([eventId]) => seenEvents.has(eventId))];
+        if (options.length === 1) options.push(["333", "3x3"]);
     }
+    scopeValueFilterEl.replaceChildren();
+    options.forEach(([value, label]) => scopeValueFilterEl.append(new Option(label, value)));
+    scopeValueFilterEl.value = options.some(([value]) => value === selectedValue) ? selectedValue : "all";
+}
 
-    eventFilterEl.replaceChildren();
-    options.forEach(([eventId, label]) => {
-        const option = document.createElement("option");
-        option.value = eventId;
-        option.textContent = label;
-        eventFilterEl.append(option);
-    });
-    eventFilterEl.value = options.some(([eventId]) => eventId === selectedEvent) ? selectedEvent : "all";
+function renderTimePartOptions() {
+    const selected = timePartFilterEl.value || "final";
+    const isSpecificSession = scopeFilterEl.value === "session" && scopeValueFilterEl.value !== "all";
+    const selectedSession = isSpecificSession
+        ? state.sessions.find((session) => session.id === scopeValueFilterEl.value)
+        : null;
+    const phaseCount = Number(selectedSession?.phaseCount || 0);
+    const showTimeParts = isSpecificSession && phaseCount > 0;
+    timePartFieldEl.hidden = !showTimeParts;
+    timePartFieldEl.style.display = showTimeParts ? "" : "none";
+    timePartFilterEl.disabled = !showTimeParts;
+    timePartFilterEl.replaceChildren(new Option("Final", "final"));
+    for (let phase = 1; phase <= phaseCount; phase += 1) {
+        timePartFilterEl.append(new Option(getPhaseName(selectedSession, phase - 1), `phase:${phase - 1}`));
+    }
+    timePartFilterEl.value = [...timePartFilterEl.options].some((option) => option.value === selected)
+        ? selected
+        : "final";
 }
 
 async function pullRemoteState() {
@@ -100,8 +147,9 @@ async function pullRemoteState() {
         };
         localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
 
-        state.solves = loadSolves();
-        renderEventOptions();
+        loadAnalyticsState();
+        renderScopeOptions();
+        renderTimePartOptions();
         render();
     } catch {
         // Analytics remains available with local data while offline or disconnected.
@@ -138,7 +186,6 @@ function mergeSessions(left, right) {
 
 function render() {
     const filteredSolves = getFilteredSolves();
-    const allRangeSolves = getRangeFilteredSolves(state.solves);
     const rollingSize = Number(rollingFilterEl.value);
 
     renderSummary(filteredSolves);
@@ -146,25 +193,30 @@ function render() {
     renderTrendChart(filteredSolves, rollingSize);
     renderDistributionChart(filteredSolves);
     renderDailyChart(filteredSolves);
-    renderEventChart(allRangeSolves);
+    renderEventChart(filteredSolves);
 }
 
 function getFilteredSolves() {
-    const eventId = eventFilterEl.value;
-    return getRangeFilteredSolves(state.solves).filter((solve) => eventId === "all" || solve.event === eventId);
+    const mode = scopeFilterEl.value;
+    const selectedValue = scopeValueFilterEl.value;
+    const scoped = state.solves.filter((solve) => {
+        if (selectedValue === "all") return true;
+        if (mode === "session") return (solve.sessionId || "playground") === selectedValue;
+        return solve.event === selectedValue;
+    });
+    return getRangeFilteredSolves(scoped);
 }
 
 function getRangeFilteredSolves(solves) {
     const range = rangeFilterEl.value;
     if (range === "all") return [...solves];
-
     const cutoff = Date.now() - Number(range) * 24 * 60 * 60 * 1000;
     return solves.filter((solve) => solve.createdAt >= cutoff);
 }
 
 function renderSummary(solves) {
-    const eventLabel = eventFilterEl.value === "all" ? "all events" : getEventLabel(eventFilterEl.value);
-    summaryLineEl.textContent = `${solves.length} solves shown for ${eventLabel}`;
+    const selected = scopeValueFilterEl.options[scopeValueFilterEl.selectedIndex]?.textContent || "All";
+    summaryLineEl.textContent = `${solves.length} solves shown for ${selected}`;
 }
 
 function renderStatCards(solves) {
@@ -190,8 +242,12 @@ function renderStatCards(solves) {
 }
 
 function renderTrendChart(solves, rollingSize) {
-    const validSolves = solves.filter((solve) => Number.isFinite(getAdjustedTime(solve)));
-    const rolling = rollingSeries(solves, rollingSize);
+    const orderedSolves = [...solves].sort((left, right) => Number(left.createdAt || 0) - Number(right.createdAt || 0));
+    const byDate = dateTimelineEl.checked;
+    const validSolves = orderedSolves
+        .filter((solve) => Number.isFinite(getAdjustedTime(solve)))
+        .map((solve, index) => ({solve, x: byDate ? solve.createdAt : index}));
+    const rolling = rollingSeries(orderedSolves, rollingSize, byDate);
     trendMetaEl.textContent = `raw solves and ao${rollingSize}`;
 
     if (validSolves.length === 0) {
@@ -199,21 +255,36 @@ function renderTrendChart(solves, rollingSize) {
         return;
     }
 
-    const minX = Math.min(...validSolves.map((solve) => solve.createdAt));
-    const maxX = Math.max(...validSolves.map((solve) => solve.createdAt));
-    const yValues = [...validSolves.map(getAdjustedTime), ...rolling.map((point) => point.value)];
+    const xValues = [...validSolves.map((point) => point.x), ...rolling.map((point) => point.x)];
+    const minX = Math.min(...xValues);
+    const maxX = Math.max(...xValues);
+    const yValues = [...validSolves.map((point) => getAdjustedTime(point.solve)), ...rolling.map((point) => point.value)];
     const minY = Math.min(...yValues);
     const maxY = Math.max(...yValues);
-    const chart = createSvgChart(minX, maxX, minY, maxY, {showTimeAxis: true});
+    const chart = createSvgChart(minX, maxX, minY, maxY, {showTimeAxis: byDate});
     const tooltip = createTrendTooltip();
-    const personalBestSolveIds = getRollingPersonalBestSolveIds(solves);
+    const personalBestSolveIds = getRollingPersonalBestSolveIds(orderedSolves);
 
-    validSolves.forEach((solve) => {
+    if (!byDate) {
+        const rawSeries = validSolves.map(({solve, x}) => ({
+            x,
+            value: getAdjustedTime(solve),
+        }));
+        chart.svg.append(svgEl("path", {
+            d: linePath(rawSeries, chart.x, chart.y),
+            class: "raw-series-line",
+        }));
+    }
+
+    validSolves.forEach(({solve, x}) => {
+        const isPersonalBest = personalBestSolveIds.has(solve.id);
+        if (!byDate && !isPersonalBest) return;
+
         const circle = svgEl("circle", {
-            cx: chart.x(solve.createdAt),
+            cx: chart.x(x),
             cy: chart.y(getAdjustedTime(solve)),
             r: 3.3,
-            class: `point ${personalBestSolveIds.has(solve.id) ? "point-pb" : ""}`,
+            class: `point ${isPersonalBest ? "point-pb" : ""}`,
         });
         bindTrendTooltip(circle, solve, tooltip, trendChartEl);
         chart.svg.append(circle);
@@ -325,6 +396,7 @@ function renderDistributionChart(solves) {
 }
 
 function renderDailyChart(solves) {
+    solveCountMetaEl.textContent = "daily volume";
     const days = groupByDay(solves).map((day) => {
         const validTimes = day.solves.map(getAdjustedTime).filter(Number.isFinite);
         return {
@@ -388,15 +460,14 @@ function renderDailyChart(solves) {
 }
 
 function renderEventChart(solves) {
-    const grouped = groupByEvent(solves)
-        .map((group) => ({
-            ...group, median: median(group.solves.map(getAdjustedTime).filter(Number.isFinite)),
-        }))
-        .filter((group) => Number.isFinite(group.median))
-        .sort((a, b) => a.median - b.median);
+    const selectedSession = getSelectedSession();
+    const grouped = buildFormatsGroups(solves, selectedSession);
+    formatsMetaEl.textContent = selectedSession && Number(selectedSession.phaseCount || 0) > 0
+        ? "median by split"
+        : "median by event";
 
     if (grouped.length === 0) {
-        renderEmpty(eventChartEl, "No event data in this range");
+        renderEmpty(eventChartEl, selectedSession ? "No split data in this range" : "No event data in this range");
         return;
     }
 
@@ -423,7 +494,7 @@ function renderEventChart(solves) {
         }));
         svg.append(svgEl("text", {
             x: x + barWidth / 2, y: height - 24, "text-anchor": "middle", class: "chart-text",
-        }, getEventLabel(group.event)));
+        }, group.label));
         svg.append(svgEl("text", {
             x: x + barWidth / 2,
             y: margin.top + innerHeight - barHeight - 6,
@@ -433,6 +504,29 @@ function renderEventChart(solves) {
     });
 
     renderSvg(eventChartEl, svg);
+}
+
+function buildFormatsGroups(solves, selectedSession) {
+    if (selectedSession && Number(selectedSession.phaseCount || 0) > 0) {
+        return Array.from({length: Number(selectedSession.phaseCount)}, (_, phaseIndex) => ({
+            label: getPhaseName(selectedSession, phaseIndex),
+            median: median(solves
+                .map((solve) => Number(solve.phaseTimesMs?.[phaseIndex]))
+                .filter(Number.isFinite)),
+        })).filter((group) => Number.isFinite(group.median));
+    }
+    return groupByEvent(solves)
+        .map((group) => ({
+            label: getEventLabel(group.event),
+            median: median(group.solves.map(getAdjustedTime).filter(Number.isFinite)),
+        }))
+        .filter((group) => Number.isFinite(group.median))
+        .sort((a, b) => a.median - b.median);
+}
+
+function getSelectedSession() {
+    if (scopeFilterEl.value !== "session" || scopeValueFilterEl.value === "all") return null;
+    return state.sessions.find((session) => session.id === scopeValueFilterEl.value) || null;
 }
 
 function createSvgChart(minX, maxX, minY, maxY, {showTimeAxis = false, yFormatter = formatTime} = {}) {
@@ -531,15 +625,19 @@ function formatTimeAxisLabel(timestamp, span) {
     }).format(date);
 }
 
-function rollingSeries(solves, size) {
-    if (solves.length < size) return [];
+function rollingSeries(solves, size, byDate = true) {
+    const eligibleSolves = getAverageEligibleSolves(solves);
+    if (eligibleSolves.length < size) return [];
 
     const points = [];
-    for (let index = 0; index <= solves.length - size; index += 1) {
-        const window = solves.slice(index, index + size);
+    for (let index = 0; index <= eligibleSolves.length - size; index += 1) {
+        const window = eligibleSolves.slice(index, index + size);
         const value = calculateAverage(window);
         if (Number.isFinite(value)) {
-            points.push({x: window[window.length - 1].createdAt, value});
+            points.push({
+                x: byDate ? window[window.length - 1].createdAt : index + size - 1,
+                value,
+            });
         }
     }
     return points;
@@ -563,7 +661,8 @@ function getRollingPersonalBestSolveIds(solves) {
 }
 
 function calculateAverage(solves) {
-    const times = solves.map(getAdjustedTime).sort((a, b) => a - b);
+    const times = getAverageEligibleSolves(solves).map(getAdjustedTime).sort((a, b) => a - b);
+    if (times.length === 0) return Infinity;
     if (times.length < 3) return mean(times);
     const trimmed = times.slice(1, -1);
     if (trimmed.some((time) => !Number.isFinite(time))) return Infinity;
@@ -571,16 +670,18 @@ function calculateAverage(solves) {
 }
 
 function currentAverage(solves, size) {
-    if (solves.length < size) return Infinity;
-    return calculateAverage(solves.slice(-size));
+    const eligibleSolves = getAverageEligibleSolves(solves);
+    if (eligibleSolves.length < size) return Infinity;
+    return calculateAverage(eligibleSolves.slice(-size));
 }
 
 function bestAverage(solves, size) {
-    if (solves.length < size) return Infinity;
+    const eligibleSolves = getAverageEligibleSolves(solves);
+    if (eligibleSolves.length < size) return Infinity;
 
     let best = Infinity;
-    for (let index = 0; index <= solves.length - size; index += 1) {
-        best = Math.min(best, calculateAverage(solves.slice(index, index + size)));
+    for (let index = 0; index <= eligibleSolves.length - size; index += 1) {
+        best = Math.min(best, calculateAverage(eligibleSolves.slice(index, index + size)));
     }
     return best;
 }
@@ -598,11 +699,12 @@ function bestSingleContext(solves) {
 }
 
 function bestAverageContext(solves, size) {
-    if (solves.length < size) return null;
+    const eligibleSolves = getAverageEligibleSolves(solves);
+    if (eligibleSolves.length < size) return null;
 
     let best = null;
-    for (let index = 0; index <= solves.length - size; index += 1) {
-        const window = solves.slice(index, index + size);
+    for (let index = 0; index <= eligibleSolves.length - size; index += 1) {
+        const window = eligibleSolves.slice(index, index + size);
         const value = calculateAverage(window);
         if (!Number.isFinite(value)) continue;
         if (!best || value < best.value) {
@@ -615,7 +717,8 @@ function bestAverageContext(solves, size) {
 }
 
 function bestAverageDay(solves, size) {
-    const orderedSolves = [...solves].sort((a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0));
+    const orderedSolves = getAverageEligibleSolves(solves)
+        .sort((a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0));
     if (orderedSolves.length < size) return null;
 
     let best = null;
@@ -641,8 +744,26 @@ function totalSolveTime(solves) {
 }
 
 function getAdjustedTime(solve) {
+    const selected = timePartFilterEl.value;
+    if (selected?.startsWith("phase:")) {
+        const phaseIndex = Number(selected.slice(6));
+        const phaseTime = solve.phaseTimesMs?.[phaseIndex];
+        return phaseTime !== null && phaseTime !== undefined && Number.isFinite(Number(phaseTime))
+            ? Number(phaseTime)
+            : Infinity;
+    }
     if (solve.penalty === "DNF") return Infinity;
     return solve.timeMs + (solve.penalty === "+2" ? 2000 : 0);
+}
+
+function getAverageEligibleSolves(solves) {
+    if (!timePartFilterEl.value?.startsWith("phase:")) return [...solves];
+    return solves.filter((solve) => Number.isFinite(getAdjustedTime(solve)));
+}
+
+function getPhaseName(session, phaseIndex) {
+    const savedName = session?.phaseNames?.[phaseIndex];
+    return typeof savedName === "string" && savedName.trim() ? savedName.trim() : `P${phaseIndex + 1}`;
 }
 
 function groupByDay(solves) {
@@ -768,8 +889,9 @@ function createTrendTooltip() {
 
 function bindTrendTooltip(point, solve, tooltip, container) {
     point.addEventListener("mouseenter", (event) => {
-        const penalty = solve.penalty && solve.penalty !== "OK" ? ` ${solve.penalty}` : "";
-        tooltip.querySelector("strong").textContent = `${formatTime(solve.timeMs)}${penalty}`;
+        const viewingFinal = timePartFilterEl.value === "final";
+        const penalty = viewingFinal && solve.penalty && solve.penalty !== "OK" ? ` ${solve.penalty}` : "";
+        tooltip.querySelector("strong").textContent = `${formatTime(getAdjustedTime(solve))}${penalty}`;
         tooltip.querySelector("span").textContent = `${formatDateTime(solve.createdAt)}`;
         tooltip.hidden = false;
         positionTrendTooltip(event, tooltip, container);
