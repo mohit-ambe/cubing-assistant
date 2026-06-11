@@ -835,10 +835,10 @@ function formatDecimal(value) {
 }
 
 function formatDuration(ms) {
-    if (!Number.isFinite(ms) || ms <= 0) return "~0h (0m)";
+    if (!Number.isFinite(ms) || ms <= 0) return "0m";
     const roundedMinutes = Math.round(ms / 60000);
+    if (ms < 3600000) return `${roundedMinutes}m`;
     const roundedHours = Math.round(ms / 3600000);
-    if (roundedHours === 0) return `${roundedMinutes}m`;
     return `~${roundedHours}h (${roundedMinutes}m)`;
 }
 

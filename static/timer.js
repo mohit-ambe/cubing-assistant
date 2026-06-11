@@ -14,6 +14,7 @@ const MOUSE_ONLY_NAVIGATION_SELECTOR = [
     ".average-times",
     ".scramble-drawing-panel",
 ].join(", ");
+const KEYBOARD_SCROLL_KEYS = new Set(["Space", "ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End"]);
 
 const EVENTS = [["222", "2x2"], ["333", "3x3"], ["444", "4x4"], ["555", "5x5"], ["666", "6x6"], ["777", "7x7"], ["333oh", "3x3 OH"], ["333bf", "3x3 Blindfolded"], ["333fm", "3x3 Fewest Moves"], ["333mbf", "3x3 Multi-Blind"], ["clock", "Clock"], ["minx", "Megaminx"], ["pyram", "Pyraminx"], ["skewb", "Skewb"], ["sq1", "Square-1"],];
 
@@ -249,6 +250,12 @@ function onControlKeyDown(event) {
         return;
     }
 
+    if (event.target.closest(".times-list") && KEYBOARD_SCROLL_KEYS.has(event.code)) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        return;
+    }
+
     if (event.code !== "Space") return;
     if (!event.target.closest(MOUSE_ONLY_NAVIGATION_SELECTOR)) return;
 
@@ -277,6 +284,9 @@ function makeMouseOnlyControl(control) {
 }
 
 function onKeyDown(event) {
+    if (event.code === "Space" && !isTextEntryTarget(event.target)) {
+        event.preventDefault();
+    }
     if (event.repeat) return;
 
     if (state.timerState === "running") {
@@ -300,7 +310,6 @@ function onKeyDown(event) {
     }
 
     if (event.code !== "Space") return;
-    event.preventDefault();
     pressTimer();
 }
 
@@ -1174,6 +1183,10 @@ function getScrambleLabel(total) {
 
 function isInteractiveTarget(target) {
     return Boolean(target.closest("button, input, select, textarea, a, .resize-handle, .scramble-drawing-panel"));
+}
+
+function isTextEntryTarget(target) {
+    return Boolean(target.closest("input, textarea, [contenteditable='true']"));
 }
 
 async function copyScrambleText(scramble) {
