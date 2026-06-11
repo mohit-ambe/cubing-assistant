@@ -1015,15 +1015,12 @@ function scheduleSync() {
 async function pullRemoteState() {
     if (isAccountSwitchPending()) return;
     try {
-        const response = await fetch("/api/sync");
-        if (response.status === 401) return;
-        const remote = await response.json();
-        if (!response.ok) throw new Error(remote.error || "Could not download Drive sync data.");
-
+        const remote = await window.CubingAssistantSync.downloadSnapshot();
         mergeRemoteState(remote);
         markSyncCompleted();
         saveState();
-    } catch {
+    } catch (error) {
+        if (error.status === 401) return;
         // Local solve recording remains available while Drive is disconnected or offline.
     }
 }
@@ -1031,24 +1028,22 @@ async function pullRemoteState() {
 async function pushRemoteState() {
     if (isAccountSwitchPending()) return;
     try {
-        const response = await fetch("/api/sync", {
-            method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(createSyncSnapshot()),
-        });
-        if (response.status === 401) return;
-        const remote = await response.json();
-        if (!response.ok) throw new Error(remote.error || "Could not upload Drive sync data.");
-
+        const remote = await window.CubingAssistantSync.uploadSnapshot(createSyncSnapshot());
         mergeRemoteState(remote);
         markSyncCompleted();
         localStorage.setItem(STORAGE_KEY, JSON.stringify(createStoredState()));
-    } catch {
+    } catch (error) {
+        if (error.status === 401) return;
         // The next local mutation or page load retries synchronization.
     }
 }
 
 function flushSyncWithBeacon() {
     if (!state.syncReady || isAccountSwitchPending() || !navigator.sendBeacon) return;
-    navigator.sendBeacon("/api/sync", JSON.stringify(createSyncSnapshot()));
+    const payload = JSON.stringify(createSyncSnapshot());
+    if (new Blob([payload]).size <= 1_250_000) {
+        navigator.sendBeacon("/api/sync", payload);
+    }
 }
 
 function markSyncCompleted() {

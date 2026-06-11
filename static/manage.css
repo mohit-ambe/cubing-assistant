@@ -436,6 +436,35 @@ td {
     color: var(--danger);
 }
 
+.import-progress {
+    align-items: center;
+    display: grid;
+    gap: 7px;
+    grid-template-columns: minmax(12rem, 1fr) auto;
+}
+
+.import-progress-track {
+    background: var(--surface);
+    border: 1px solid var(--outline);
+    height: 8px;
+    overflow: hidden;
+}
+
+.import-progress-track span {
+    background: var(--primary);
+    display: block;
+    height: 100%;
+    transition: width 180ms ease;
+    width: 0;
+}
+
+#importProgressText {
+    color: var(--muted);
+    font: 500 11px/16px "JetBrains Mono", monospace;
+    min-width: 9rem;
+    text-align: right;
+}
+
 .import-table-wrap {
     max-height: 52dvh;
 }

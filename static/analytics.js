@@ -85,10 +85,7 @@ function renderEventOptions() {
 async function pullRemoteState() {
     if (localStorage.getItem(ACCOUNT_SWITCH_STORAGE_KEY)) return;
     try {
-        const response = await fetch("/api/sync");
-        if (response.status === 401) return;
-        const remote = await response.json();
-        if (!response.ok) return;
+        const remote = await window.CubingAssistantSync.downloadSnapshot();
 
         const raw = localStorage.getItem(STORAGE_KEY);
         const saved = raw ? JSON.parse(raw) : {};

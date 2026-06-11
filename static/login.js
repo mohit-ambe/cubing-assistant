@@ -260,7 +260,7 @@ function render() {
 async function syncNow() {
     await runManualSync("Syncing...", async () => {
         const local = createLocalSnapshot();
-        const remote = await fetchJson("/api/sync");
+        const remote = await window.CubingAssistantSync.downloadSnapshot();
         const merged = mergeSnapshots(local, remote, conflictModeEl.value);
         applySnapshot(merged);
         const uploaded = await postSnapshot(merged, "local");
@@ -279,7 +279,7 @@ async function uploadLocalData() {
 
 async function downloadFromDrive() {
     await runManualSync("Downloading from Drive...", async () => {
-        const remote = await fetchJson("/api/sync");
+        const remote = await window.CubingAssistantSync.downloadSnapshot();
         const merged = mergeSnapshots(createLocalSnapshot(), remote, conflictModeEl.value);
         applySnapshot(merged);
         return "Drive data downloaded.";
@@ -329,7 +329,7 @@ async function presentPendingAccountSwitch() {
     }
 
     try {
-        const remoteSnapshot = await fetchJson("/api/sync");
+        const remoteSnapshot = await window.CubingAssistantSync.downloadSnapshot();
         if (!pendingAccountSwitch || profile?.sub !== switchedAccountSub) return;
         pendingRemoteSnapshot = remoteSnapshot;
         accountDataSummaryEl.textContent = summarizeSnapshot(pendingRemoteSnapshot);
@@ -465,9 +465,7 @@ function markSyncCompleted() {
 }
 
 async function postSnapshot(snapshot, mode = "newest") {
-    return fetchJson(`/api/sync?mode=${encodeURIComponent(mode)}`, {
-        method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(snapshot),
-    });
+    return window.CubingAssistantSync.uploadSnapshot(snapshot, mode);
 }
 
 function createLocalSnapshot() {

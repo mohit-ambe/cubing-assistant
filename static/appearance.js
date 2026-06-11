@@ -345,15 +345,13 @@ async function pushRemoteTheme() {
     if (localStorage.getItem("cubingAssistant.pendingAccountSwitch")) return;
     try {
         const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
-        await fetch("/api/sync", {
-            method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({
-                schemaVersion: 2,
-                updatedAt: Date.now(),
-                sessions: saved.sessions || [],
-                solves: saved.solves || [],
-                sessionScrambleIndexes: saved.sessionScrambleIndexes || {},
-                theme,
-            }),
+        await window.CubingAssistantSync.uploadSnapshot({
+            schemaVersion: 2,
+            updatedAt: Date.now(),
+            sessions: saved.sessions || [],
+            solves: saved.solves || [],
+            sessionScrambleIndexes: saved.sessionScrambleIndexes || {},
+            theme,
         });
     } catch {
     }

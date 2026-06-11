@@ -3,23 +3,6 @@ const ACCOUNT_SWITCH_STORAGE_KEY = "cubingAssistant.pendingAccountSwitch";
 const ACCOUNT_SWITCH_RESOLVED_STORAGE_KEY = "cubingAssistant.accountSwitchResolved";
 const PLAYGROUND_SESSION_ID = "playground";
 const EVENTS = [["222", "2x2"], ["333", "3x3"], ["444", "4x4"], ["555", "5x5"], ["666", "6x6"], ["777", "7x7"], ["333oh", "3x3 OH"], ["333bf", "3x3 Blindfolded"], ["333fm", "3x3 Fewest Moves"], ["333mbf", "3x3 Multi-Blind"], ["clock", "Clock"], ["minx", "Megaminx"], ["pyram", "Pyraminx"], ["skewb", "Skewb"], ["sq1", "Square-1"],];
-const CSTIMER_EVENTS = {
-    "222so": "222",
-    "333": "333",
-    "333oh": "333oh",
-    "333ni": "333bf",
-    "333fm": "333fm",
-    "r3ni": "333mbf",
-    "444wca": "444",
-    "555wca": "555",
-    "666wca": "666",
-    "777wca": "777",
-    "clkwca": "clock",
-    "mgmp": "minx",
-    "pyrso": "pyram",
-    "skbso": "skewb",
-    "sqrs": "sq1",
-};
 
 window.addEventListener("storage", (event) => {
     if (event.key === ACCOUNT_SWITCH_RESOLVED_STORAGE_KEY) {
@@ -28,7 +11,14 @@ window.addEventListener("storage", (event) => {
 });
 
 const state = {
-    sessions: [], solves: [], sessionScrambleIndexes: {}, selectedSessionId: PLAYGROUND_SESSION_ID, stagedSessions: []
+    sessions: [],
+    solves: [],
+    sessionScrambleIndexes: {},
+    selectedSessionId: PLAYGROUND_SESSION_ID,
+    stagedSessions: [],
+    importJobId: null,
+    importPollTimer: null,
+    importTerminalHandled: null,
 };
 const sessionListEl = document.querySelector("#sessionList");
 const sessionDetailEl = document.querySelector("#sessionDetail");
@@ -44,6 +34,10 @@ const importRowsEl = document.querySelector("#importRows");
 const importSummaryEl = document.querySelector("#importSummary");
 const importErrorEl = document.querySelector("#importError");
 const commitImportEl = document.querySelector("#commitImport");
+const cancelImportEl = document.querySelector("#cancelImport");
+const importProgressEl = document.querySelector("#importProgress");
+const importProgressBarEl = document.querySelector("#importProgressBar");
+const importProgressTextEl = document.querySelector("#importProgressText");
 const confirmDialogEl = document.querySelector("#confirmDialog");
 const confirmTitleEl = document.querySelector("#confirmTitle");
 const confirmTextEl = document.querySelector("#confirmText");
@@ -57,17 +51,21 @@ async function init() {
     bindEvents();
     render();
     await pullRemoteState();
+    await resumeActiveImport();
 }
 
 function bindEvents() {
     searchEl.addEventListener("input", renderSessionList);
     filterEl.addEventListener("change", renderSessionList);
     document.querySelector("#newSession").addEventListener("click", openCreateDialog);
-    document.querySelector("#importCstimer").addEventListener("click", () => importDialogEl.showModal());
+    document.querySelector("#importCstimer").addEventListener("click", () => {
+        if (!importDialogEl.open) importDialogEl.showModal();
+    });
     document.querySelector("#exportBackup").addEventListener("click", exportBackup);
     document.querySelector("#saveSession").addEventListener("click", saveCreatedSession);
     cstimerFileEl.addEventListener("change", readCstimerFile);
     commitImportEl.addEventListener("click", commitImport);
+    cancelImportEl.addEventListener("click", cancelImport);
     sessionListEl.addEventListener("click", (event) => {
         const item = event.target.closest("[data-session-id]");
         if (!item) return;
@@ -263,46 +261,49 @@ async function readCstimerFile() {
     resetImport();
     const file = cstimerFileEl.files[0];
     if (!file) return;
+    setImportProgress(0, "Uploading");
+    cstimerFileEl.disabled = true;
     try {
-        const data = JSON.parse(await file.text());
-        state.stagedSessions = parseCstimerBackup(data);
-        if (!state.stagedSessions.length) throw new Error("No csTimer sessions were found.");
-        renderImportRows();
+        const job = await uploadImportFile(file);
+        state.importJobId = job.id;
+        renderImportJob(job);
+        scheduleImportPoll();
     } catch (error) {
-        importErrorEl.hidden = false;
-        importErrorEl.textContent = `Could not read this backup: ${error.message}`;
+        showImportError(error.message);
+        cstimerFileEl.disabled = false;
+        importProgressEl.hidden = true;
     }
 }
 
-function parseCstimerBackup(data) {
-    if (!data || typeof data !== "object") throw new Error("The file is not a JSON object.");
-    let metadata = {};
-    try {
-        metadata = JSON.parse(data.properties?.sessionData || "{}");
-    } catch {
-        metadata = {};
-    }
-    return Object.keys(data).filter((key) => /^session\d+$/.test(key) && Array.isArray(data[key])).map((key) => {
-        const number = key.replace("session", "");
-        const meta = metadata[number] || {};
-        const event = detectCstimerEvent(meta);
-        if (data[key].some((solve) => !Array.isArray(solve) || !Array.isArray(solve[0]) || !Number.isFinite(Number(solve[0][1])))) {
-            throw new Error(`${key} contains an invalid solve.`);
-        }
-        return {key, name: meta.name || `csTimer ${key}`, event, solves: data[key], action: "create", destination: ""};
-    }).sort((a, b) => Number(a.key.replace("session", "")) - Number(b.key.replace("session", "")));
-}
-
-function detectCstimerEvent(meta) {
-    const scrType = meta.opt?.scrType || "";
-    if (CSTIMER_EVENTS[scrType]) return CSTIMER_EVENTS[scrType];
-    const name = String(meta.name || "").toLowerCase();
-    for (const [id, label] of EVENTS) if (name.includes(label.toLowerCase())) return id;
-    return "333";
+function uploadImportFile(file) {
+    return new Promise((resolve, reject) => {
+        const request = new XMLHttpRequest();
+        request.open("POST", "/api/imports");
+        request.setRequestHeader("Content-Type", "application/octet-stream");
+        request.setRequestHeader("X-File-Name", file.name);
+        request.upload.addEventListener("progress", (event) => {
+            if (event.lengthComputable) {
+                const percent = Math.round((event.loaded / event.total) * 100);
+                setImportProgress(percent, `Uploading ${percent}%`);
+            }
+        });
+        request.addEventListener("load", () => {
+            let payload = {};
+            try {
+                payload = JSON.parse(request.responseText || "{}");
+            } catch {
+            }
+            if (request.status >= 200 && request.status < 300) resolve(payload);
+            else reject(new Error(payload.error || `Upload failed (${request.status}).`));
+        });
+        request.addEventListener("error", () => reject(new Error("The upload connection failed.")));
+        request.addEventListener("abort", () => reject(new Error("The upload was cancelled.")));
+        request.send(file);
+    });
 }
 
 function renderImportRows() {
-    const solveCount = state.stagedSessions.reduce((sum, session) => sum + session.solves.length, 0);
+    const solveCount = state.stagedSessions.reduce((sum, session) => sum + session.solveCount, 0);
     importSummaryEl.textContent = `${state.stagedSessions.length} sessions and ${solveCount} solves detected. Review each destination before importing.`;
     importRowsEl.replaceChildren();
     state.stagedSessions.forEach((session, index) => {
@@ -312,7 +313,7 @@ function renderImportRows() {
         const eventSelect = row.querySelector('[data-field="event"]');
         EVENTS.forEach(([id, label]) => eventSelect.append(new Option(label, id)));
         eventSelect.value = session.event;
-        row.children[2].textContent = String(session.solves.length);
+        row.children[2].textContent = String(session.solveCount);
         const destination = row.querySelector('[data-field="destination"]');
         destination.append(new Option("New session", ""));
         getVisibleSessions().filter((entry) => entry.id !== PLAYGROUND_SESSION_ID).forEach((entry) => destination.append(new Option(`${entry.name} · ${getEventLabel(entry.event)}`, entry.id)));
@@ -337,79 +338,27 @@ function updateStagedSession(index, row) {
 async function commitImport() {
     commitImportEl.disabled = true;
     importErrorEl.hidden = true;
-    let created = 0, added = 0, duplicates = 0;
-    const existingIds = new Set(state.solves.map((solve) => solve.id));
     for (const staged of state.stagedSessions) {
-        if (staged.action === "skip") continue;
-        let sessionId = staged.destination;
-        if (staged.action === "merge" && !getVisibleSessions().some((session) => session.id === sessionId)) {
-            importErrorEl.hidden = false;
-            importErrorEl.textContent = `Choose a destination for ${staged.name}.`;
+        if (staged.action === "merge" && !getVisibleSessions().some((session) => session.id === staged.destination)) {
+            showImportError(`Choose a destination for ${staged.name}.`);
             commitImportEl.disabled = false;
             return;
         }
-        const newSolves = [];
-        for (const rawSolve of staged.solves) {
-            const solve = await convertCstimerSolve(staged, sessionId, rawSolve);
-            if (existingIds.has(solve.id)) {
-                duplicates += 1;
-                continue;
-            }
-            existingIds.add(solve.id);
-            newSolves.push(solve);
-        }
-        if (!newSolves.length) continue;
-        if (staged.action === "create") {
-            const now = Date.now();
-            sessionId = crypto.randomUUID();
-            state.sessions.push({
-                id: sessionId,
-                name: staged.name || `${getEventLabel(staged.event)} import`,
-                event: staged.event,
-                createdAt: now,
-                updatedAt: now
-            });
-            created += 1;
-        }
-        for (const solve of newSolves) {
-            solve.sessionId = sessionId;
-            state.solves.push(solve);
-            added += 1;
-        }
     }
-    saveState();
-    render();
-    importDialogEl.close();
-    window.alert(`Import complete: ${created} sessions created, ${added} solves added, ${duplicates} duplicates skipped.`);
-    resetImport(true);
-}
-
-async function convertCstimerSolve(staged, sessionId, rawSolve) {
-    if (!Array.isArray(rawSolve) || !Array.isArray(rawSolve[0])) throw new Error(`Invalid solve in ${staged.name}.`);
-    const penaltyValue = Number(rawSolve[0][0]) || 0;
-    const timeMs = Number(rawSolve[0][1]);
-    const scramble = String(rawSolve[1] || "");
-    const comment = String(rawSolve[2] || "");
-    const timestampSeconds = Number(rawSolve[3]) || 0;
-    const fingerprint = await sha256(["cstimer", staged.key, penaltyValue, timeMs, scramble, comment, timestampSeconds].join("\u001f"));
-    return {
-        id: `cstimer:${fingerprint}`,
-        sessionId,
-        event: staged.event,
-        timeMs,
-        scramble,
-        comment,
-        createdAt: timestampSeconds * 1000,
-        updatedAt: timestampSeconds * 1000,
-        penalty: penaltyValue < 0 ? "DNF" : penaltyValue > 0 ? "+2" : "OK",
-        source: {provider: "cstimer", sessionKey: staged.key, fingerprint, importedAt: Date.now()},
-    };
-}
-
-async function sha256(text) {
-    const bytes = new TextEncoder().encode(text);
-    const digest = await crypto.subtle.digest("SHA-256", bytes);
-    return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    try {
+        const response = await fetch(`/api/imports/${state.importJobId}/start`, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({sessions: state.stagedSessions}),
+        });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || "Could not start the import.");
+        renderImportJob(payload);
+        scheduleImportPoll();
+    } catch (error) {
+        showImportError(error.message);
+        commitImportEl.disabled = false;
+    }
 }
 
 function resetImport(clearFile = false) {
@@ -417,15 +366,124 @@ function resetImport(clearFile = false) {
     importRowsEl.replaceChildren();
     importErrorEl.hidden = true;
     commitImportEl.disabled = true;
+    cancelImportEl.hidden = true;
+    importProgressEl.hidden = true;
+    cstimerFileEl.disabled = false;
     if (clearFile) cstimerFileEl.value = "";
+}
+
+async function resumeActiveImport() {
+    try {
+        const response = await fetch("/api/imports/active");
+        if (!response.ok) return;
+        const job = await response.json();
+        if (!job.id) return;
+        state.importJobId = job.id;
+        renderImportJob(job);
+        scheduleImportPoll();
+    } catch {
+    }
+}
+
+function scheduleImportPoll() {
+    window.clearTimeout(state.importPollTimer);
+    state.importPollTimer = window.setTimeout(pollImportJob, 900);
+}
+
+async function pollImportJob() {
+    if (!state.importJobId) return;
+    try {
+        const response = await fetch(`/api/imports/${state.importJobId}`);
+        const job = await response.json();
+        if (!response.ok) throw new Error(job.error || "Could not read import status.");
+        renderImportJob(job);
+        if (!["completed", "failed", "cancelled"].includes(job.status)) scheduleImportPoll();
+    } catch (error) {
+        showImportError(error.message);
+        scheduleImportPoll();
+    }
+}
+
+function renderImportJob(job) {
+    state.importJobId = job.id;
+    cstimerFileEl.disabled = !["completed", "failed", "cancelled"].includes(job.status);
+    cancelImportEl.hidden = ["awaiting_configuration", "completed", "failed", "cancelled"].includes(job.status);
+    importErrorEl.hidden = true;
+
+    if (job.status === "awaiting_configuration") {
+        state.stagedSessions = (job.sessions || []).map((session) => ({
+            ...session, action: "create", destination: ""
+        }));
+        importProgressEl.hidden = true;
+        renderImportRows();
+        return;
+    }
+
+    commitImportEl.disabled = true;
+    if (job.status !== "completed") importRowsEl.replaceChildren();
+    const status = importStatus(job);
+    importSummaryEl.textContent = status.summary;
+    setImportProgress(status.percent, status.label);
+
+    if (job.status === "failed") {
+        showImportError(job.error || "The import failed.");
+        cstimerFileEl.disabled = false;
+    } else if (job.status === "cancelled") {
+        importSummaryEl.textContent = "Import stopped.";
+        cstimerFileEl.disabled = false;
+    } else if (job.status === "completed" && state.importTerminalHandled !== job.id) {
+        state.importTerminalHandled = job.id;
+        const result = job.result || {};
+        pullRemoteState();
+        window.alert(`Import complete: ${result.created || 0} sessions created, ${result.added || 0} solves added, ${result.duplicates || 0} duplicates skipped.`);
+        resetImport(true);
+        state.importJobId = null;
+    }
+}
+
+function importStatus(job) {
+    if (job.status === "uploading") return {percent: 0, label: "Uploading", summary: "Receiving the backup file."};
+    if (job.status === "uploaded" || job.status === "inspecting") return {percent: 5, label: "Inspecting", summary: "Inspecting sessions on the server."};
+    if (job.status === "queued") return {percent: 8, label: "Queued", summary: "Import queued. You can close this page."};
+    if (job.status === "parsing") {
+        const percent = job.totalSolves ? 10 + Math.round((job.processedSolves / job.totalSolves) * 65) : 10;
+        return {percent, label: `${job.processedSolves}/${job.totalSolves}`, summary: "Parsing and deduplicating solves on the server. You can close this page."};
+    }
+    if (job.status === "merging") return {percent: 78, label: "Merging", summary: "Merging imported solves with the Drive snapshot."};
+    if (job.status === "drive_uploading") {
+        const fraction = job.uploadTotalBytes ? job.uploadSentBytes / job.uploadTotalBytes : 0;
+        return {percent: 80 + Math.round(fraction * 19), label: `Drive ${Math.round(fraction * 100)}%`, summary: "Uploading the merged snapshot to Google Drive. You can close this page."};
+    }
+    if (job.status === "completed") return {percent: 100, label: "Complete", summary: "Import complete."};
+    return {percent: 0, label: job.status, summary: "Import stopped."};
+}
+
+function setImportProgress(percent, text) {
+    importProgressEl.hidden = false;
+    importProgressBarEl.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+    importProgressTextEl.textContent = text;
+}
+
+function showImportError(message) {
+    importErrorEl.hidden = false;
+    importErrorEl.textContent = message;
+}
+
+async function cancelImport() {
+    if (!state.importJobId) return;
+    try {
+        const response = await fetch(`/api/imports/${state.importJobId}`, {method: "DELETE"});
+        if (!response.ok) throw new Error("Could not stop the import.");
+        renderImportJob({...await response.json(), id: state.importJobId});
+    } catch (error) {
+        showImportError(error.message);
+    }
 }
 
 async function pullRemoteState() {
     if (localStorage.getItem(ACCOUNT_SWITCH_STORAGE_KEY)) return;
     try {
-        const response = await fetch("/api/sync");
-        if (!response.ok) return;
-        mergeRemote(await response.json());
+        mergeRemote(await window.CubingAssistantSync.downloadSnapshot());
         saveState();
         render();
     } catch {
@@ -435,11 +493,7 @@ async function pullRemoteState() {
 async function pushRemoteState() {
     if (localStorage.getItem(ACCOUNT_SWITCH_STORAGE_KEY)) return;
     try {
-        const response = await fetch("/api/sync", {
-            method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(createSnapshot())
-        });
-        if (!response.ok) return;
-        mergeRemote(await response.json());
+        mergeRemote(await window.CubingAssistantSync.uploadSnapshot(createSnapshot()));
         localStorage.setItem(STORAGE_KEY, JSON.stringify({
             ...JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}"),
             sessions: state.sessions,

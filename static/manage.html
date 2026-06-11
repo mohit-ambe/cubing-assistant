@@ -84,6 +84,10 @@
             <span>Select csTimer file</span>
             <input accept=".txt,.json,application/json,text/plain" id="cstimerFile" type="file">
         </label>
+        <div class="import-progress" hidden id="importProgress">
+            <div class="import-progress-track"><span id="importProgressBar"></span></div>
+            <span id="importProgressText"></span>
+        </div>
         <p class="error" hidden id="importError"></p>
         <div class="import-table-wrap">
             <table class="import-table">
@@ -100,7 +104,8 @@
             </table>
         </div>
         <div class="dialog-actions">
-            <button type="submit" value="cancel">Cancel</button>
+            <button hidden id="cancelImport" type="button">Stop import</button>
+            <button type="submit" value="cancel">Close</button>
             <button disabled id="commitImport" type="button">Import selected</button>
         </div>
     </form>
@@ -117,6 +122,7 @@
     </form>
 </dialog>
 
+<script src="/static/sync.js"></script>
 <script src="/static/manage.js"></script>
 </body>
 </html>
