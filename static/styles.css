@@ -22,7 +22,16 @@
     --times-width: 26rem;
     --main-min-width: 24rem;
     --times-min-width: 22rem;
+    --times-max-width: calc(100vw - var(--side-tabs-width) - var(--main-min-width) - 16px);
     --phase-count: 1;
+    --split-index-width: 28px;
+    --split-time-column-width: 8.5rem;
+    --split-phase-column-width: 4.5rem;
+    --split-column-gap: 10px;
+    --split-inline-padding: 12px;
+    --split-panel-base-width: 150px;
+    --split-panel-phase-width: 70px;
+    --split-content-width: 350px;
 }
 
 * {
@@ -134,7 +143,7 @@ button[data-action="delete"]:hover {
 
 .app {
     display: grid;
-    grid-template-columns: minmax(var(--main-min-width), 1fr) 16px minmax(var(--times-min-width), var(--times-width));
+    grid-template-columns: minmax(0, 1fr) 16px minmax(var(--times-min-width), min(var(--times-width), var(--times-max-width)));
     grid-template-rows: minmax(var(--scramble-min-height), var(--scramble-height)) 0 minmax(0, 1fr);
     height: 100dvh;
     overflow: hidden;
@@ -224,7 +233,7 @@ button[data-action="delete"]:hover {
     gap: 4px;
 }
 
-.font-controls button, .times-actions button {
+.font-controls button, .scramble-controls > button, .times-actions button {
     align-items: center;
     background: transparent;
     border-color: transparent;
@@ -624,7 +633,8 @@ scramble-display {
     margin: 0;
     min-height: 0;
     outline: none;
-    overflow: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
     padding: 0;
 }
 
@@ -646,8 +656,12 @@ scramble-display {
 
 .time-columns-header, .split-time-row {
     display: grid;
-    grid-template-columns: 32px minmax(6rem, 1.2fr) repeat(var(--phase-count), minmax(4.5rem, 1fr));
-    min-width: max-content;
+    gap: var(--split-column-gap);
+    grid-template-columns: var(--split-index-width) minmax(var(--split-time-column-width), 1fr) repeat(var(--phase-count), var(--split-phase-column-width));
+    min-width: var(--split-content-width);
+    padding-left: var(--split-inline-padding);
+    padding-right: var(--split-inline-padding);
+    width: 100%;
 }
 
 .time-columns-header {
@@ -655,8 +669,8 @@ scramble-display {
     border-bottom: 1px solid var(--outline);
     color: var(--muted);
     font: 500 10px/16px "JetBrains Mono", monospace;
-    gap: 16px;
-    padding: 6px 16px;
+    padding-bottom: 6px;
+    padding-top: 6px;
     position: sticky;
     text-transform: uppercase;
     top: 0;
@@ -680,16 +694,21 @@ scramble-display {
 }
 
 .split-time-entry {
-    min-width: calc(9rem + var(--phase-count) * 6rem);
+    min-width: var(--split-content-width);
 }
 
 .split-time-row {
-    gap: 16px;
+    padding-bottom: 8px;
+    padding-top: 8px;
+}
+
+.split-time-row .time-index {
+    min-width: 0;
 }
 
 .phase-time-value {
     align-self: center;
-    font: 500 15px/22px "JetBrains Mono", monospace;
+    font: 500 14px/18px "JetBrains Mono", monospace;
     white-space: nowrap;
 }
 

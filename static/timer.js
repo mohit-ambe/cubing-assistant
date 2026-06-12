@@ -1,4 +1,5 @@
 const READY_DELAY_MS = 500;
+const SPLIT_INPUT_GRACE_MS = 150;
 const INSPECTION_DURATION_MS = 15_000;
 const INSPECTION_HOLD_THRESHOLD_MS = 7_000;
 const INSPECTION_DANGER_THRESHOLD_MS = 3_000;
@@ -11,6 +12,8 @@ const ACCOUNT_SWITCH_RESOLVED_STORAGE_KEY = "cubingAssistant.accountSwitchResolv
 const SYNC_DEBOUNCE_MS = 1500;
 const DIRTY_SYNC_INTERVAL_MS = 30_000;
 const PLAYGROUND_SESSION_ID = "playground";
+const DEFAULT_TIMES_MIN_WIDTH_PX = 352;
+const RESIZE_HANDLE_WIDTH_PX = 16;
 const MOUSE_ONLY_NAVIGATION_SELECTOR = [
     "button",
     "select",
@@ -45,7 +48,9 @@ const sessionSelectEl = document.querySelector("#sessionSelect");
 const createSessionEl = document.querySelector("#createSession");
 const eventSelectEl = document.querySelector("#eventSelect");
 const fixedEventLabelEl = document.querySelector("#fixedEventLabel");
+const timesPanelEl = document.querySelector(".times-panel");
 const randomScrambleEl = document.querySelector("#randomScramble");
+const resetLayoutEl = document.querySelector("#resetLayout");
 const decreaseScrambleFontEl = document.querySelector("#decreaseScrambleFont");
 const increaseScrambleFontEl = document.querySelector("#increaseScrambleFont");
 const statsBodyEl = document.querySelector("#statsBody");
@@ -87,6 +92,7 @@ const state = {
     timerUpdateMs: 10,
     touchIdentifier: null,
     phaseTimesMs: [],
+    splitInputReadyAt: 0,
     redoSolveId: null,
     redoScramble: "",
     scrambleFontSize: 1.9,
@@ -141,7 +147,7 @@ function bindEvents() {
     document.addEventListener("keydown", onControlKeyDown, true);
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
-    window.addEventListener("resize", constrainScrambleDrawing);
+    window.addEventListener("resize", onWindowResize);
 
     document.addEventListener("touchstart", onTouchStart, {passive: false});
     document.addEventListener("touchend", onTouchEnd, {passive: false});
@@ -196,6 +202,8 @@ function bindEvents() {
         saveState();
         render();
     });
+
+    resetLayoutEl.addEventListener("click", resetLayout);
 
     decreaseScrambleFontEl.addEventListener("click", () => {
         state.scrambleFontSize = clamp(state.scrambleFontSize - 0.1, 0.9, 3.2);
@@ -477,6 +485,7 @@ function startTimer() {
     state.elapsedMs = 0;
     state.lastDisplayMs = 0;
     state.phaseTimesMs = [];
+    state.splitInputReadyAt = 0;
     renderTimerState();
     tick();
 }
@@ -538,7 +547,11 @@ function recordPhaseOrStop() {
         return;
     }
 
-    const elapsed = performance.now() - state.startTime;
+    const now = performance.now();
+    if (now < state.splitInputReadyAt) return;
+    state.splitInputReadyAt = now + SPLIT_INPUT_GRACE_MS;
+
+    const elapsed = now - state.startTime;
     const previousTotal = state.phaseTimesMs.reduce((sum, value) => sum + value, 0);
     state.phaseTimesMs.push(Math.max(0, Math.round(elapsed) - previousTotal));
     if (state.phaseTimesMs.length >= phaseCount) {
@@ -552,6 +565,7 @@ function stopTimer(elapsed = performance.now() - state.startTime) {
     state.elapsedMs = elapsed;
     state.lastDisplayMs = state.elapsedMs;
     state.timerState = "idle";
+    state.splitInputReadyAt = 0;
     cancelAnimationFrame(state.animationFrame);
 
     const solve = {
@@ -571,7 +585,7 @@ function stopTimer(elapsed = performance.now() - state.startTime) {
         cancelRedo();
     } else {
         state.solves.unshift(solve);
-        setScrambleIndex(clampScrambleIndex(getScrambleIndex() + 1));
+        setScrambleIndex(getRandomScrambleIndex());
     }
 
     saveState({sync: true});
@@ -875,12 +889,14 @@ function renderTimes() {
     const activeSolves = getActiveSolves();
     const personalBestSolveIds = getRollingPersonalBestSolveIds(activeSolves);
     const phaseCount = getActivePhaseCount();
+    updateTimesPanelMinWidth(phaseCount);
 
     if (activeSolves.length === 0) {
         const empty = document.createElement("li");
         empty.className = "empty";
         empty.textContent = `No solves in ${getActiveSession().name} yet`;
         timesListEl.append(empty);
+        syncTimesPanelMinWidth();
         return;
     }
 
@@ -1006,10 +1022,13 @@ function renderTimes() {
 
         timesListEl.append(item);
     });
+
+    syncTimesPanelMinWidth();
 }
 
 function renderTimesLoading() {
     clearTimesLoading();
+    updateTimesPanelMinWidth(getActivePhaseCount());
     timesListEl.setAttribute("aria-busy", "true");
     timesListEl.replaceChildren();
 
@@ -1215,6 +1234,7 @@ function editPhaseName(cell) {
             saveState({sync: true});
         }
         cell.textContent = save ? getPhaseName(session, phaseIndex) : originalName;
+        window.requestAnimationFrame(syncTimesPanelMinWidth);
     };
     input.addEventListener("keydown", (event) => {
         if (event.key === "Enter") {
@@ -1589,7 +1609,7 @@ function onResizeStart(event) {
     const startX = event.clientX;
     const startY = event.clientY;
     const startScrambleHeight = getCssPixelValue("--scramble-height");
-    const startTimesWidth = getCssPixelValue("--times-width");
+    const startTimesWidth = timesPanelEl.getBoundingClientRect().width;
 
     event.preventDefault();
     handle.classList.add("dragging");
@@ -1604,9 +1624,8 @@ function onResizeStart(event) {
         }
 
         if (resizeTarget === "times") {
-            const minWidth = getCssPixelValue("--times-min-width") || 352;
-            const mainMinWidth = getCssPixelValue("--main-min-width") || 384;
-            const maxWidth = Math.max(minWidth, window.innerWidth - mainMinWidth - 56);
+            const minWidth = getCssPixelValue("--times-min-width") || DEFAULT_TIMES_MIN_WIDTH_PX;
+            const maxWidth = getAvailableTimesPanelWidth();
             const nextWidth = clamp(startTimesWidth - (moveEvent.clientX - startX), minWidth, maxWidth);
             appEl.style.setProperty("--times-width", `${nextWidth}px`);
         }
@@ -1708,6 +1727,52 @@ function constrainScrambleDrawing() {
     setScrambleDrawingPosition(scrambleDrawingPanelEl.offsetLeft, scrambleDrawingPanelEl.offsetTop);
 }
 
+function onWindowResize() {
+    updateTimesPanelMinWidth(getActivePhaseCount());
+    window.requestAnimationFrame(syncTimesPanelMinWidth);
+    constrainScrambleDrawing();
+}
+
+function updateTimesPanelMinWidth(phaseCount) {
+    const splitBaseWidth = getCssPixelValue("--split-panel-base-width");
+    const splitPhaseWidth = getCssPixelValue("--split-panel-phase-width");
+    const splitContentWidth = splitBaseWidth + phaseCount * splitPhaseWidth;
+    const desiredWidth = phaseCount ? Math.max(DEFAULT_TIMES_MIN_WIDTH_PX, splitContentWidth) : DEFAULT_TIMES_MIN_WIDTH_PX;
+    appEl.style.setProperty("--split-content-width", `${desiredWidth}px`);
+    applyTimesPanelBounds(desiredWidth);
+}
+
+function syncTimesPanelMinWidth() {
+    const timesHeader = timesPanelEl.querySelector(".times-header");
+    const statsTable = timesPanelEl.querySelector(".stats-table");
+    const requiredWidth = Math.ceil(Math.max(
+        DEFAULT_TIMES_MIN_WIDTH_PX,
+        timesHeader?.scrollWidth || 0,
+        statsTable?.scrollWidth || 0,
+        timesListEl.scrollWidth,
+    ));
+    applyTimesPanelBounds(requiredWidth);
+}
+
+function applyTimesPanelBounds(requiredWidth) {
+    const maxWidth = getAvailableTimesPanelWidth();
+    const minWidth = Math.min(requiredWidth, maxWidth);
+    const currentWidth = getCssPixelValue("--times-width") || DEFAULT_TIMES_MIN_WIDTH_PX;
+    appEl.style.setProperty("--times-min-width", `${minWidth}px`);
+    appEl.style.setProperty("--times-max-width", `${maxWidth}px`);
+    appEl.style.setProperty("--times-width", `${clamp(currentWidth, minWidth, maxWidth)}px`);
+}
+
+function getAvailableTimesPanelWidth() {
+    const appStyle = getComputedStyle(appEl);
+    const appLeftPadding = Number.parseFloat(appStyle.paddingLeft) || 0;
+    const mainMinWidth = getCssPixelValue("--main-min-width") || 384;
+    return Math.max(
+        DEFAULT_TIMES_MIN_WIDTH_PX,
+        appEl.clientWidth - appLeftPadding - mainMinWidth - RESIZE_HANDLE_WIDTH_PX,
+    );
+}
+
 function setScrambleDrawingSize(width) {
     scrambleDrawingPanelEl.style.width = `${width}px`;
     scrambleDrawingPanelEl.style.height = `${getScrambleDrawingHeightForWidth(width)}px`;
@@ -1733,6 +1798,23 @@ function getCssPixelValue(name) {
     return Number.parseFloat(value) || 0;
 }
 
+function resetLayout() {
+    appEl.style.removeProperty("--scramble-height");
+    appEl.style.removeProperty("--times-width");
+    scrambleDrawingPanelEl.style.removeProperty("left");
+    scrambleDrawingPanelEl.style.removeProperty("top");
+    scrambleDrawingPanelEl.style.removeProperty("bottom");
+    scrambleDrawingPanelEl.style.removeProperty("width");
+    scrambleDrawingPanelEl.style.removeProperty("height");
+    updateTimesPanelMinWidth(getActivePhaseCount());
+    window.requestAnimationFrame(() => {
+        syncTimesPanelMinWidth();
+        constrainScrambleDrawing();
+        saveLayout();
+    });
+    statusEl.textContent = "Layout reset";
+}
+
 function saveLayout() {
     localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify({
         scrambleHeight: getCssPixelValue("--scramble-height"),
@@ -1756,7 +1838,8 @@ function loadLayout() {
             appEl.style.setProperty("--scramble-height", `${saved.scrambleHeight}px`);
         }
         if (Number.isFinite(saved.timesWidth)) {
-            appEl.style.setProperty("--times-width", `${saved.timesWidth}px`);
+            const maxWidth = getAvailableTimesPanelWidth();
+            appEl.style.setProperty("--times-width", `${clamp(saved.timesWidth, DEFAULT_TIMES_MIN_WIDTH_PX, maxWidth)}px`);
         }
         if (saved.scrambleDrawing) {
             const {left, top, width} = saved.scrambleDrawing;
