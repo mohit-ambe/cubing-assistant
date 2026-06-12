@@ -36,6 +36,7 @@ IMPORT_DIR = LOCAL_DIR / "imports"
 IMPORT_DB = LOCAL_DIR / "imports.sqlite3"
 IMPORT_MAX_BYTES = 1_000_000_000
 IMPORT_BATCH_SIZE = 2_000
+STATELESS_BATCH_MAX_SOLVES = 1_000
 DRIVE_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
 SYNC_CHUNK_TARGET_BYTES = 1_250_000
 SYNC_TRANSFER_TTL_SECONDS = 24 * 60 * 60
@@ -594,6 +595,32 @@ def sync_drive_snapshot(subject, incoming, mode):
         return merged
 
 
+def merge_import_batch(subject, incoming, mode="newest"):
+    with drive_subject_lock(subject):
+        remote = read_drive_snapshot(subject)
+        existing_solve_ids = {solve.get("id") for solve in remote.get("solves", []) if solve.get("id")}
+        incoming_solves = [solve for solve in incoming.get("solves", []) if solve.get("id")]
+        seen_solve_ids = set(existing_solve_ids)
+        added = 0
+        duplicates = 0
+        for solve in incoming_solves:
+            if solve["id"] in seen_solve_ids:
+                duplicates += 1
+            else:
+                seen_solve_ids.add(solve["id"])
+                added += 1
+        existing_session_ids = {session.get("id") for session in remote.get("sessions", []) if session.get("id")}
+        incoming_sessions = [session for session in incoming.get("sessions", []) if session.get("id")]
+        created = sum(session["id"] not in existing_session_ids for session in incoming_sessions)
+        merged = merge_snapshots(remote, incoming, mode)
+        write_drive_snapshot(subject, merged)
+        return {
+            "added": added,
+            "duplicates": duplicates,
+            "created": created,
+        }
+
+
 def record_updated_at(record):
     return int(
         record.get("updatedAt") or record.get("deletedAt") or record.get("redoneAt") or record.get("createdAt") or 0)
@@ -745,8 +772,8 @@ def initialize_import_storage(recover_jobs=True):
                 WHERE status = 'inspecting'
             """, (int(time.time() * 1000),))
         expires_before = int((time.time() - SYNC_TRANSFER_TTL_SECONDS) * 1000)
-        expired_ids = [row["id"] for row in
-            connection.execute("SELECT id FROM sync_transfers WHERE updated_at < ?", (expires_before,), ).fetchall()]
+        expired_ids = [row["id"] for row in connection.execute("SELECT id FROM sync_transfers WHERE updated_at < ?",
+                                                               (expires_before,), ).fetchall()]
         if expired_ids:
             placeholders = ",".join("?" for _ in expired_ids)
             connection.execute(f"DELETE FROM sync_transfer_solves WHERE transfer_id IN ({placeholders})", expired_ids, )
@@ -937,7 +964,7 @@ def inspect_cstimer_import(job):
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
         """, rows)
     update_import_job(job_id, status="awaiting_configuration", total_sessions=len(rows),
-        total_solves=sum(counts.values()), processed_solves=0, )
+                      total_solves=sum(counts.values()), processed_solves=0, )
 
 
 def js_number_string(value):
@@ -965,7 +992,7 @@ def convert_cstimer_solve(source_key, event, session_id, raw_solve, imported_at)
     comment = str(raw_solve[2] or "") if len(raw_solve) > 2 else ""
     fingerprint_source = "\x1f".join(
         ["cstimer", source_key, js_number_string(penalty_value), js_number_string(time_ms), scramble, comment,
-            js_number_string(timestamp_seconds), ])
+         js_number_string(timestamp_seconds), ])
     fingerprint = hashlib.sha256(fingerprint_source.encode("utf-8")).hexdigest()
     timestamp_ms = numeric_json_value(float(timestamp_seconds) * 1000)
     solve = {
@@ -996,7 +1023,7 @@ def convert_cstimer_solve(source_key, event, session_id, raw_solve, imported_at)
                 boundaries[index] < boundaries[index + 1] for index in range(len(boundaries) - 1)):
             raise RuntimeError(f"{source_key} contains split times outside the solve duration.")
         solve["phaseTimesMs"] = [numeric_json_value(boundaries[index] - boundaries[index + 1]) for index in
-            range(len(boundaries) - 2, -1, -1)]
+                                 range(len(boundaries) - 2, -1, -1)]
         solve["source"]["cstimerCumulativeSplitsMs"] = cumulative_splits
     return solve
 
@@ -1019,7 +1046,7 @@ def stage_cstimer_solves(job, configuration):
         selected = selected_by_key.get(source_key)
         if selected:
             solve = convert_cstimer_solve(source_key, selected["event"], selected["sessionId"], raw_solve,
-                imported_at, )
+                                          imported_at, )
             batch.append((job_id, solve["id"], json.dumps(solve, separators=(",", ":"))))
         if len(batch) >= IMPORT_BATCH_SIZE:
             with import_db() as connection:
@@ -1044,13 +1071,13 @@ def build_import_snapshot(job, configuration):
     existing_solves = {solve.get("id"): solve for solve in remote.get("solves", []) if solve.get("id")}
     existing_session_ids = {session.get("id") for session in remote.get("sessions", []) if session.get("id")}
     missing_destinations = [selected["name"] for selected in configuration if
-        selected["action"] == "merge" and selected["sessionId"] not in existing_session_ids]
+                            selected["action"] == "merge" and selected["sessionId"] not in existing_session_ids]
     if missing_destinations:
         raise RuntimeError(
             f"The destination for {missing_destinations[0]} is not present in Google Drive. Sync it first, then retry.")
     added_by_session = {}
     phase_counts_by_session = {selected["sessionId"]: selected["phaseCount"] for selected in configuration if
-        selected.get("phaseCount") and selected["action"] != "skip"}
+                               selected.get("phaseCount") and selected["action"] != "skip"}
     duplicates = 0
     enriched = 0
     offset = 0
@@ -1145,14 +1172,12 @@ def start_resumable_drive_upload(subject, file_size):
     }
     if file_id:
         request = UrlRequest(f"https://www.googleapis.com/upload/drive/v3/files/{file_id}?uploadType=resumable",
-            data=b"", method="PATCH", headers=headers, )
+                             data=b"", method="PATCH", headers=headers, )
     else:
         request = UrlRequest("https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable", data=json.dumps({
-                                                                                                                          "name": DRIVE_FILENAME,
-                                                                                                                          "parents": [
-                                                                                                                              "appDataFolder"]
-                                                                                                                      }).encode(
-            "utf-8"), method="POST", headers=headers, )
+            "name": DRIVE_FILENAME,
+            "parents": ["appDataFolder"]
+        }).encode("utf-8"), method="POST", headers=headers, )
     with open_drive_upload(request) as response:
         upload_uri = response.headers.get("Location")
     if not upload_uri:
@@ -1169,7 +1194,7 @@ def upload_snapshot_resumable(job, output_path):
         upload_uri = start_resumable_drive_upload(job["google_sub"], total)
         offset = 0
         update_import_job(job_id, drive_upload_uri=upload_uri, drive_upload_offset=0, upload_total_bytes=total,
-            upload_sent_bytes=0, )
+                          upload_sent_bytes=0, )
 
     access_token = refresh_access_token(job["google_sub"])
     with output_path.open("rb") as source:
@@ -1229,7 +1254,7 @@ def process_import_job(job):
             if import_job_cancelled(job_id):
                 return
             update_import_job(job_id, status="drive_uploading", output_path=str(output_path),
-                result_json=json.dumps(result, separators=(",", ":")), )
+                              result_json=json.dumps(result, separators=(",", ":")), )
             upload_snapshot_resumable(get_import_job(job_id), output_path)
         if import_job_cancelled(job_id):
             return
@@ -1252,7 +1277,7 @@ def import_worker():
             if job:
                 claimed_status = "inspecting" if job["status"] == "uploaded" else "parsing"
                 connection.execute("UPDATE import_jobs SET status = ?, updated_at = ? WHERE id = ?",
-                    (claimed_status, int(time.time() * 1000), job["id"]), )
+                                   (claimed_status, int(time.time() * 1000), job["id"]), )
         if job:
             process_import_job(job)
             continue
@@ -1387,7 +1412,7 @@ def append_sync_upload_chunk(transfer, offset, solves):
         raise ApiError("Sync chunk exceeds the declared solve count.")
     now = int(time.time() * 1000)
     rows = [(transfer["id"], offset + index, json.dumps(solve, separators=(",", ":"))) for index, solve in
-        enumerate(solves)]
+            enumerate(solves)]
     with import_db() as connection:
         connection.executemany("""
             INSERT INTO sync_transfer_solves (transfer_id, solve_index, payload_json)
@@ -1441,11 +1466,11 @@ def finalize_sync_upload(transfer):
     except Exception:
         with import_db() as connection:
             connection.execute("UPDATE sync_transfers SET status = 'receiving', updated_at = ? WHERE id = ?",
-                (int(time.time() * 1000), transfer["id"]), )
+                               (int(time.time() * 1000), transfer["id"]), )
         raise
     with import_db() as connection:
         connection.execute("UPDATE sync_transfers SET status = 'completed', updated_at = ? WHERE id = ?",
-            (int(time.time() * 1000), transfer["id"]), )
+                           (int(time.time() * 1000), transfer["id"]), )
         connection.execute("DELETE FROM sync_transfer_solves WHERE transfer_id = ?", (transfer["id"],), )
     return descriptor
 
@@ -1850,8 +1875,8 @@ async def configure_import(job_id: str, request: Request):
             })
 
     update_import_job(job_id, status="queued", configuration_json=json.dumps(configured, separators=(",", ":")),
-        processed_solves=0, drive_upload_uri=None, drive_upload_offset=0, upload_total_bytes=0, upload_sent_bytes=0,
-        error=None, )
+                      processed_solves=0, drive_upload_uri=None, drive_upload_offset=0, upload_total_bytes=0,
+                      upload_sent_bytes=0, error=None, )
     IMPORT_WORKER_EVENT.set()
     return serialize_import_job(get_import_job(job_id, session["sub"]))
 
@@ -1868,6 +1893,26 @@ async def cancel_import(job_id: str, request: Request):
     return {
         "status": "cancelled"
     }
+
+
+@app.post("/api/import-batches")
+async def import_batch(request: Request):
+    session = await require_session(request)
+    connected = await run_in_threadpool(get_user_tokens, session["sub"])
+    if not connected:
+        raise ApiError("Connect Google Drive before importing.", 409)
+    incoming = await read_json_body(request)
+    mode = incoming.pop("mode", "newest")
+    if mode not in {"newest", "local", "drive"}:
+        mode = "newest"
+    if not isinstance(incoming.get("sessions", []), list) or not isinstance(incoming.get("solves", []), list):
+        raise ApiError("Import batch must contain session and solve lists.")
+    if len(incoming.get("solves", [])) > STATELESS_BATCH_MAX_SOLVES:
+        raise ApiError(f"Import batches may contain at most {STATELESS_BATCH_MAX_SOLVES} solves.", 413)
+    try:
+        return await run_in_threadpool(merge_import_batch, session["sub"], incoming, mode)
+    except RuntimeError as error:
+        raise ApiError(str(error)) from error
 
 
 @app.post("/api/sync/downloads")
@@ -1907,7 +1952,7 @@ async def start_sync_upload(request: Request):
     if mode not in {"newest", "local", "drive"}:
         mode = "newest"
     descriptor = await run_in_threadpool(create_sync_transfer, session["sub"], "upload", metadata, range(total_solves),
-        mode, )
+                                         mode, )
     return descriptor
 
 

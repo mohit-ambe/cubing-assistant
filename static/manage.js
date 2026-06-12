@@ -3,6 +3,26 @@ const ACCOUNT_SWITCH_STORAGE_KEY = "cubingAssistant.pendingAccountSwitch";
 const ACCOUNT_SWITCH_RESOLVED_STORAGE_KEY = "cubingAssistant.accountSwitchResolved";
 const SYNC_DIRTY_STORAGE_KEY = "cubingAssistant.syncDirty";
 const PLAYGROUND_SESSION_ID = "playground";
+const IMPORT_DB_NAME = "cubingAssistantImports";
+const IMPORT_DB_VERSION = 1;
+const IMPORT_BATCH_SIZE = 500;
+const CSTIMER_EVENTS = {
+    "222so": "222",
+    "333": "333",
+    "333oh": "333oh",
+    "333ni": "333bf",
+    "333fm": "333fm",
+    "r3ni": "333mbf",
+    "444wca": "444",
+    "555wca": "555",
+    "666wca": "666",
+    "777wca": "777",
+    "clkwca": "clock",
+    "mgmp": "minx",
+    "pyrso": "pyram",
+    "skbso": "skewb",
+    "sqrs": "sq1",
+};
 const EVENTS = [["222", "2x2"], ["333", "3x3"], ["444", "4x4"], ["555", "5x5"], ["666", "6x6"], ["777", "7x7"], ["333oh", "3x3 OH"], ["333bf", "3x3 Blindfolded"], ["333fm", "3x3 Fewest Moves"], ["333mbf", "3x3 Multi-Blind"], ["clock", "Clock"], ["minx", "Megaminx"], ["pyram", "Pyraminx"], ["skewb", "Skewb"], ["sq1", "Square-1"],];
 
 window.addEventListener("storage", (event) => {
@@ -18,7 +38,6 @@ const state = {
     selectedSessionId: PLAYGROUND_SESSION_ID,
     stagedSessions: [],
     importJobId: null,
-    importPollTimer: null,
     importTerminalHandled: null,
 };
 const sessionListEl = document.querySelector("#sessionList");
@@ -275,13 +294,16 @@ async function readCstimerFile() {
     resetImport();
     const file = cstimerFileEl.files[0];
     if (!file) return;
-    setImportProgress(0, "Uploading");
+    if (!("indexedDB" in window)) {
+        showImportError("This browser does not support IndexedDB, which is required for resumable imports.");
+        return;
+    }
+    setImportProgress(0, "Reading");
     cstimerFileEl.disabled = true;
     try {
-        const job = await uploadImportFile(file);
+        const job = await stageCstimerFile(file);
         state.importJobId = job.id;
         renderImportJob(job);
-        scheduleImportPoll();
     } catch (error) {
         showImportError(error.message);
         cstimerFileEl.disabled = false;
@@ -289,31 +311,57 @@ async function readCstimerFile() {
     }
 }
 
-function uploadImportFile(file) {
-    return new Promise((resolve, reject) => {
-        const request = new XMLHttpRequest();
-        request.open("POST", "/api/imports");
-        request.setRequestHeader("Content-Type", "application/octet-stream");
-        request.setRequestHeader("X-File-Name", file.name);
-        request.upload.addEventListener("progress", (event) => {
-            if (event.lengthComputable) {
-                const percent = Math.round((event.loaded / event.total) * 100);
-                setImportProgress(percent, `Uploading ${percent}%`);
-            }
-        });
-        request.addEventListener("load", () => {
-            let payload = {};
-            try {
-                payload = JSON.parse(request.responseText || "{}");
-            } catch {
-            }
-            if (request.status >= 200 && request.status < 300) resolve(payload);
-            else reject(new Error(payload.error || `Upload failed (${request.status}).`));
-        });
-        request.addEventListener("error", () => reject(new Error("The upload connection failed.")));
-        request.addEventListener("abort", () => reject(new Error("The upload was cancelled.")));
-        request.send(file);
+async function stageCstimerFile(file) {
+    let data;
+    try {
+        data = JSON.parse(await file.text());
+    } catch (error) {
+        throw new Error(`Could not parse the csTimer file: ${error.message}`);
+    }
+    if (!data || typeof data !== "object" || Array.isArray(data)) {
+        throw new Error("The selected file is not a csTimer backup.");
+    }
+
+    const metadata = parseCstimerSessionMetadata(data.properties?.sessionData);
+    const sourceKeys = Object.keys(data)
+        .filter((key) => /^session\d+$/.test(key) && Array.isArray(data[key]) && data[key].length)
+        .sort((left, right) => Number(left.slice(7)) - Number(right.slice(7)));
+    if (!sourceKeys.length) throw new Error("No csTimer sessions were found in this backup.");
+
+    const jobId = crypto.randomUUID();
+    const sessions = sourceKeys.map((sourceKey) => {
+        const number = sourceKey.slice(7);
+        const sessionMetadata = metadata[number] && typeof metadata[number] === "object" ? metadata[number] : {};
+        const phaseCount = normalizeCstimerPhaseCount(sessionMetadata.opt?.phases);
+        return {
+            key: sourceKey,
+            name: String(sessionMetadata.name || `csTimer ${sourceKey}`),
+            event: detectCstimerEvent(sessionMetadata),
+            phaseCount,
+            solveCount: data[sourceKey].length,
+            action: "create",
+            destination: "",
+        };
     });
+    const rawSolves = [];
+    sourceKeys.forEach((sourceKey) => {
+        data[sourceKey].forEach((rawSolve) => {
+            rawSolves.push({jobId, index: rawSolves.length, sourceKey, rawSolve});
+        });
+    });
+    const job = {
+        id: jobId,
+        fileName: file.name,
+        status: "awaiting_configuration",
+        sessions,
+        totalSolves: rawSolves.length,
+        processedSolves: 0,
+        importedAt: Date.now(),
+        result: {created: 0, added: 0, duplicates: 0},
+        updatedAt: Date.now(),
+    };
+    await replaceImportJob(job, rawSolves);
+    return job;
 }
 
 function renderImportRows() {
@@ -360,15 +408,19 @@ async function commitImport() {
         }
     }
     try {
-        const response = await fetch(`/api/imports/${state.importJobId}/start`, {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({sessions: state.stagedSessions}),
-        });
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.error || "Could not start the import.");
-        renderImportJob(payload);
-        scheduleImportPoll();
+        const job = await getImportJob(state.importJobId);
+        if (!job) throw new Error("The staged import is no longer available in this browser.");
+        job.sessions = state.stagedSessions.map((session) => ({
+            ...session,
+            sessionId: session.action === "merge" ? session.destination : crypto.randomUUID(),
+        }));
+        job.status = "importing";
+        job.processedSolves = 0;
+        job.result = {created: 0, added: 0, duplicates: 0};
+        job.syncToDrive = await importShouldSyncToDrive();
+        job.updatedAt = Date.now();
+        await putImportJob(job);
+        await processIndexedImport(job);
     } catch (error) {
         showImportError(error.message);
         commitImportEl.disabled = false;
@@ -388,33 +440,12 @@ function resetImport(clearFile = false) {
 
 async function resumeActiveImport() {
     try {
-        const response = await fetch("/api/imports/active");
-        if (!response.ok) return;
-        const job = await response.json();
-        if (!job.id) return;
+        const job = await getActiveImportJob();
+        if (!job) return;
         state.importJobId = job.id;
         renderImportJob(job);
-        scheduleImportPoll();
+        if (job.status === "importing") await processIndexedImport(job);
     } catch {
-    }
-}
-
-function scheduleImportPoll() {
-    window.clearTimeout(state.importPollTimer);
-    state.importPollTimer = window.setTimeout(pollImportJob, 900);
-}
-
-async function pollImportJob() {
-    if (!state.importJobId) return;
-    try {
-        const response = await fetch(`/api/imports/${state.importJobId}`);
-        const job = await response.json();
-        if (!response.ok) throw new Error(job.error || "Could not read import status.");
-        renderImportJob(job);
-        if (!["completed", "failed", "cancelled"].includes(job.status)) scheduleImportPoll();
-    } catch (error) {
-        showImportError(error.message);
-        scheduleImportPoll();
     }
 }
 
@@ -425,9 +456,7 @@ function renderImportJob(job) {
     importErrorEl.hidden = true;
 
     if (job.status === "awaiting_configuration") {
-        state.stagedSessions = (job.sessions || []).map((session) => ({
-            ...session, action: "create", destination: ""
-        }));
+        state.stagedSessions = (job.sessions || []).map((session) => ({...session}));
         importProgressEl.hidden = true;
         renderImportRows();
         return;
@@ -435,9 +464,13 @@ function renderImportJob(job) {
 
     commitImportEl.disabled = true;
     if (job.status !== "completed") importRowsEl.replaceChildren();
-    const status = importStatus(job);
-    importSummaryEl.textContent = status.summary;
-    setImportProgress(status.percent, status.label);
+    if (job.status === "importing") {
+        const percent = job.totalSolves ? Math.round((job.processedSolves / job.totalSolves) * 100) : 0;
+        importSummaryEl.textContent = job.syncToDrive
+            ? "Importing staged solves into Google Drive. You can close this page and resume later."
+            : "Importing staged solves into this browser. You can close this page and resume later.";
+        setImportProgress(percent, `${job.processedSolves}/${job.totalSolves}`);
+    }
 
     if (job.status === "failed") {
         showImportError(job.error || "The import failed.");
@@ -448,28 +481,10 @@ function renderImportJob(job) {
     } else if (job.status === "completed" && state.importTerminalHandled !== job.id) {
         state.importTerminalHandled = job.id;
         const result = job.result || {};
-        pullRemoteState();
         window.alert(`Import complete: ${result.created || 0} sessions created, ${result.added || 0} solves added, ${result.duplicates || 0} duplicates skipped.`);
         resetImport(true);
         state.importJobId = null;
     }
-}
-
-function importStatus(job) {
-    if (job.status === "uploading") return {percent: 0, label: "Uploading", summary: "Receiving the backup file."};
-    if (job.status === "uploaded" || job.status === "inspecting") return {percent: 5, label: "Inspecting", summary: "Inspecting sessions on the server."};
-    if (job.status === "queued") return {percent: 8, label: "Queued", summary: "Import queued. You can close this page."};
-    if (job.status === "parsing") {
-        const percent = job.totalSolves ? 10 + Math.round((job.processedSolves / job.totalSolves) * 65) : 10;
-        return {percent, label: `${job.processedSolves}/${job.totalSolves}`, summary: "Parsing and deduplicating solves on the server. You can close this page."};
-    }
-    if (job.status === "merging") return {percent: 78, label: "Merging", summary: "Merging imported solves with the Drive snapshot."};
-    if (job.status === "drive_uploading") {
-        const fraction = job.uploadTotalBytes ? job.uploadSentBytes / job.uploadTotalBytes : 0;
-        return {percent: 80 + Math.round(fraction * 19), label: `Drive ${Math.round(fraction * 100)}%`, summary: "Uploading the merged snapshot to Google Drive. You can close this page."};
-    }
-    if (job.status === "completed") return {percent: 100, label: "Complete", summary: "Import complete."};
-    return {percent: 0, label: job.status, summary: "Import stopped."};
 }
 
 function setImportProgress(percent, text) {
@@ -486,12 +501,323 @@ function showImportError(message) {
 async function cancelImport() {
     if (!state.importJobId) return;
     try {
-        const response = await fetch(`/api/imports/${state.importJobId}`, {method: "DELETE"});
-        if (!response.ok) throw new Error("Could not stop the import.");
-        renderImportJob({...await response.json(), id: state.importJobId});
+        const job = await getImportJob(state.importJobId);
+        if (!job) return;
+        job.status = "cancelled";
+        job.updatedAt = Date.now();
+        await putImportJob(job);
+        renderImportJob(job);
     } catch (error) {
         showImportError(error.message);
     }
+}
+
+async function processIndexedImport(job) {
+    cancelImportEl.hidden = false;
+    cstimerFileEl.disabled = true;
+    while (job.status === "importing" && job.processedSolves < job.totalSolves) {
+        const rawBatch = await getImportSolveBatch(job.id, job.processedSolves, IMPORT_BATCH_SIZE);
+        if (!rawBatch.length) throw new Error("The staged import is incomplete. Select the csTimer file again.");
+        const selectedByKey = new Map(job.sessions.map((session) => [session.key, session]));
+        const converted = (await Promise.all(rawBatch.map(async (entry) => {
+            const selected = selectedByKey.get(entry.sourceKey);
+            if (!selected || selected.action === "skip") return null;
+            return convertCstimerSolve(entry.sourceKey, selected.event, selected.sessionId, entry.rawSolve, job.importedAt);
+        }))).filter(Boolean);
+        const sessions = buildImportSessions(job.sessions);
+        if (converted.length || (job.processedSolves === 0 && sessions.length)) {
+            let result;
+            if (job.syncToDrive) {
+                const response = await fetch("/api/import-batches", {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({
+                        schemaVersion: 2,
+                        updatedAt: Date.now(),
+                        sessions,
+                        solves: converted,
+                        sessionScrambleIndexes: {},
+                        theme: getStoredTheme(),
+                    }),
+                });
+                result = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(result.error || `Import batch failed (${response.status}).`);
+            } else {
+                result = applyLocalImportBatch(sessions, converted);
+            }
+            job.result.created += Number(result.created || 0);
+            job.result.added += Number(result.added || 0);
+            job.result.duplicates += Number(result.duplicates || 0);
+            mergeRemote({sessions, solves: converted});
+            saveState({sync: !job.syncToDrive});
+        }
+        job.processedSolves += rawBatch.length;
+        job.updatedAt = Date.now();
+        await putImportJob(job);
+        renderImportJob(job);
+        await new Promise((resolve) => window.setTimeout(resolve, 0));
+        const refreshed = await getImportJob(job.id);
+        if (!refreshed || refreshed.status === "cancelled") {
+            job.status = "cancelled";
+            renderImportJob(job);
+            return;
+        }
+        job = refreshed;
+    }
+
+    job.status = "completed";
+    job.updatedAt = Date.now();
+    await putImportJob(job);
+    render();
+    renderImportJob(job);
+    await deleteImportJob(job.id);
+}
+
+async function importShouldSyncToDrive() {
+    try {
+        const response = await fetch("/api/auth/status");
+        if (!response.ok) return false;
+        const status = await response.json();
+        return Boolean(status.signedIn && status.driveConnected);
+    } catch {
+        return false;
+    }
+}
+
+function applyLocalImportBatch(sessions, solves) {
+    const existingSessionIds = new Set(state.sessions.map((session) => session.id));
+    const existingSolveIds = new Set(state.solves.map((solve) => solve.id));
+    const created = sessions.filter((session) => !existingSessionIds.has(session.id)).length;
+    let added = 0;
+    let duplicates = 0;
+    solves.forEach((solve) => {
+        if (existingSolveIds.has(solve.id)) {
+            duplicates += 1;
+        } else {
+            existingSolveIds.add(solve.id);
+            added += 1;
+        }
+    });
+    return {created, added, duplicates};
+}
+
+function buildImportSessions(configuredSessions) {
+    const now = Date.now();
+    return configuredSessions
+        .filter((session) => session.action !== "skip")
+        .map((session) => {
+            if (session.action === "merge") {
+                const existing = state.sessions.find((entry) => entry.id === session.sessionId);
+                if (!existing) throw new Error(`The destination for ${session.name} is no longer available.`);
+                return {
+                    ...existing,
+                    ...(session.phaseCount && !existing.phaseCount ? {phaseCount: session.phaseCount} : {}),
+                    updatedAt: session.phaseCount && !existing.phaseCount ? now : existing.updatedAt,
+                };
+            }
+            return {
+                id: session.sessionId,
+                name: session.name || `${getEventLabel(session.event)} import`,
+                event: session.event,
+                createdAt: now,
+                updatedAt: now,
+                ...(session.phaseCount ? {phaseCount: session.phaseCount} : {}),
+            };
+        });
+}
+
+function parseCstimerSessionMetadata(value) {
+    if (value && typeof value === "object") return value;
+    if (typeof value !== "string") return {};
+    try {
+        const parsed = JSON.parse(value);
+        return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+        return {};
+    }
+}
+
+function normalizeCstimerPhaseCount(value) {
+    const count = Math.floor(Number(value));
+    return Number.isFinite(count) && count >= 2 ? Math.min(count, 20) : null;
+}
+
+function detectCstimerEvent(metadata) {
+    const scrambleType = metadata?.opt?.scrType || "";
+    if (CSTIMER_EVENTS[scrambleType]) return CSTIMER_EVENTS[scrambleType];
+    const name = String(metadata?.name || "").toLowerCase();
+    return EVENTS.find(([, label]) => name.includes(label.toLowerCase()))?.[0] || "333";
+}
+
+async function convertCstimerSolve(sourceKey, event, sessionId, rawSolve, importedAt) {
+    if (!Array.isArray(rawSolve) || !Array.isArray(rawSolve[0])) {
+        throw new Error(`${sourceKey} contains an invalid solve.`);
+    }
+    const penaltyValue = Number(rawSolve[0][0] || 0);
+    const timeMs = Number(rawSolve[0][1]);
+    const timestampSeconds = Number(rawSolve[3] || 0);
+    if (![penaltyValue, timeMs, timestampSeconds].every(Number.isFinite)) {
+        throw new Error(`${sourceKey} contains an invalid solve.`);
+    }
+    const scramble = String(rawSolve[1] || "");
+    const comment = String(rawSolve[2] || "");
+    const fingerprintSource = [
+        "cstimer",
+        sourceKey,
+        jsNumberString(penaltyValue),
+        jsNumberString(timeMs),
+        scramble,
+        comment,
+        jsNumberString(timestampSeconds),
+    ].join("\x1f");
+    const fingerprint = await sha256Hex(fingerprintSource);
+    const timestampMs = timestampSeconds * 1000;
+    const solve = {
+        id: `cstimer:${fingerprint}`,
+        sessionId,
+        event,
+        timeMs,
+        scramble,
+        comment,
+        createdAt: timestampMs,
+        updatedAt: timestampMs,
+        penalty: penaltyValue < 0 ? "DNF" : penaltyValue > 0 ? "+2" : "OK",
+        source: {
+            provider: "cstimer",
+            sessionKey: sourceKey,
+            fingerprint,
+            importedAt,
+        },
+    };
+    const cumulativeSplits = rawSolve[0].slice(2).map(Number);
+    if (cumulativeSplits.length) {
+        if (cumulativeSplits.some((value) => !Number.isFinite(value))) {
+            throw new Error(`${sourceKey} contains an invalid split time.`);
+        }
+        const boundaries = [timeMs, ...cumulativeSplits, 0];
+        if (boundaries.some((value) => value < 0)
+            || boundaries.some((value, index) => index < boundaries.length - 1 && value < boundaries[index + 1])) {
+            throw new Error(`${sourceKey} contains split times outside the solve duration.`);
+        }
+        solve.phaseTimesMs = [];
+        for (let index = boundaries.length - 2; index >= 0; index -= 1) {
+            solve.phaseTimesMs.push(boundaries[index] - boundaries[index + 1]);
+        }
+        solve.source.cstimerCumulativeSplitsMs = cumulativeSplits;
+    }
+    return solve;
+}
+
+function jsNumberString(value) {
+    return Number.isInteger(value) ? String(value) : String(Number(value));
+}
+
+async function sha256Hex(value) {
+    const bytes = new TextEncoder().encode(value);
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function openImportDb() {
+    return new Promise((resolve, reject) => {
+        const request = indexedDB.open(IMPORT_DB_NAME, IMPORT_DB_VERSION);
+        request.addEventListener("upgradeneeded", () => {
+            const database = request.result;
+            if (!database.objectStoreNames.contains("jobs")) {
+                database.createObjectStore("jobs", {keyPath: "id"});
+            }
+            if (!database.objectStoreNames.contains("solves")) {
+                const store = database.createObjectStore("solves", {keyPath: ["jobId", "index"]});
+                store.createIndex("jobId", "jobId");
+            }
+        });
+        request.addEventListener("success", () => resolve(request.result));
+        request.addEventListener("error", () => reject(request.error || new Error("Could not open import storage.")));
+    });
+}
+
+async function replaceImportJob(job, solves) {
+    const database = await openImportDb();
+    await new Promise((resolve, reject) => {
+        const transaction = database.transaction(["jobs", "solves"], "readwrite");
+        const solveStore = transaction.objectStore("solves");
+        const range = IDBKeyRange.bound([job.id, 0], [job.id, Number.MAX_SAFE_INTEGER]);
+        solveStore.delete(range);
+        transaction.objectStore("jobs").put(job);
+        solves.forEach((solve) => solveStore.put(solve));
+        transaction.addEventListener("complete", resolve);
+        transaction.addEventListener("error", () => reject(transaction.error));
+        transaction.addEventListener("abort", () => reject(transaction.error));
+    });
+    database.close();
+}
+
+async function putImportJob(job) {
+    const database = await openImportDb();
+    await idbRequest(database.transaction("jobs", "readwrite").objectStore("jobs").put(job));
+    database.close();
+}
+
+async function getImportJob(jobId) {
+    const database = await openImportDb();
+    const job = await idbRequest(database.transaction("jobs").objectStore("jobs").get(jobId));
+    database.close();
+    return job || null;
+}
+
+async function getActiveImportJob() {
+    const database = await openImportDb();
+    const jobs = await idbRequest(database.transaction("jobs").objectStore("jobs").getAll());
+    database.close();
+    return jobs
+        .filter((job) => !["completed", "cancelled"].includes(job.status))
+        .sort((left, right) => Number(right.updatedAt || 0) - Number(left.updatedAt || 0))[0] || null;
+}
+
+async function getImportSolveBatch(jobId, offset, limit) {
+    const database = await openImportDb();
+    const transaction = database.transaction("solves");
+    const store = transaction.objectStore("solves");
+    const range = IDBKeyRange.bound([jobId, offset], [jobId, Number.MAX_SAFE_INTEGER]);
+    const rows = await new Promise((resolve, reject) => {
+        const results = [];
+        const request = store.openCursor(range);
+        request.addEventListener("success", () => {
+            const cursor = request.result;
+            if (!cursor || results.length >= limit) {
+                resolve(results);
+                return;
+            }
+            results.push(cursor.value);
+            cursor.continue();
+        });
+        request.addEventListener("error", () => reject(request.error));
+    });
+    database.close();
+    return rows;
+}
+
+async function deleteImportJob(jobId) {
+    const database = await openImportDb();
+    await new Promise((resolve, reject) => {
+        const transaction = database.transaction(["jobs", "solves"], "readwrite");
+        transaction.objectStore("jobs").delete(jobId);
+        transaction.objectStore("solves").delete(IDBKeyRange.bound(
+            [jobId, 0],
+            [jobId, Number.MAX_SAFE_INTEGER],
+        ));
+        transaction.addEventListener("complete", resolve);
+        transaction.addEventListener("error", () => reject(transaction.error));
+        transaction.addEventListener("abort", () => reject(transaction.error));
+    });
+    database.close();
+}
+
+function idbRequest(request) {
+    return new Promise((resolve, reject) => {
+        request.addEventListener("success", () => resolve(request.result));
+        request.addEventListener("error", () => reject(request.error));
+    });
 }
 
 async function pullRemoteState() {

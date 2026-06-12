@@ -1,5 +1,6 @@
 (function () {
     const CHUNK_TARGET_BYTES = 1_250_000;
+    const CHUNK_MAX_SOLVES = 1_000;
     const encoder = new TextEncoder();
 
     async function requestJson(url, options = {}) {
@@ -18,9 +19,17 @@
     }
 
     async function downloadSnapshot(transferId = null) {
-        const descriptor = transferId
-            ? {transferId}
-            : await requestJson("/api/sync/downloads", {method: "POST"});
+        let descriptor;
+        try {
+            descriptor = transferId
+                ? {transferId}
+                : await requestJson("/api/sync/downloads", {method: "POST"});
+        } catch (error) {
+            if (!transferId && error.status === 503) {
+                return requestJson("/api/sync");
+            }
+            throw error;
+        }
         let offset = 0;
         let snapshot = null;
         while (true) {
@@ -45,7 +54,10 @@
         let currentBytes = 24;
         for (const solve of solves) {
             const solveBytes = encoder.encode(JSON.stringify(solve)).length + 1;
-            if (current.length && currentBytes + solveBytes > CHUNK_TARGET_BYTES) {
+            if (current.length && (
+                current.length >= CHUNK_MAX_SOLVES
+                || currentBytes + solveBytes > CHUNK_TARGET_BYTES
+            )) {
                 chunks.push(current);
                 current = [];
                 currentBytes = 24;
@@ -61,11 +73,19 @@
         const solves = Array.isArray(snapshot.solves) ? snapshot.solves : [];
         const metadata = {...snapshot};
         delete metadata.solves;
-        const descriptor = await requestJson("/api/sync/uploads", {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({metadata, totalSolves: solves.length, mode}),
-        });
+        let descriptor;
+        try {
+            descriptor = await requestJson("/api/sync/uploads", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({metadata, totalSolves: solves.length, mode}),
+            });
+        } catch (error) {
+            if (error.status === 503) {
+                return uploadSnapshotStateless(metadata, solves, mode);
+            }
+            throw error;
+        }
         let offset = 0;
         for (const chunk of splitSolves(solves)) {
             await requestJson(`/api/sync/uploads/${encodeURIComponent(descriptor.transferId)}/chunks`, {
@@ -80,6 +100,19 @@
             {method: "POST"},
         );
         return downloadSnapshot(result.transferId);
+    }
+
+    async function uploadSnapshotStateless(metadata, solves, mode) {
+        const chunks = splitSolves(solves);
+        const batches = chunks.length ? chunks : [[]];
+        for (const chunk of batches) {
+            await requestJson("/api/import-batches", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({...metadata, solves: chunk, mode}),
+            });
+        }
+        return downloadSnapshot();
     }
 
     window.CubingAssistantSync = {
