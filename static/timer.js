@@ -5,9 +5,11 @@ const INSPECTION_DANGER_THRESHOLD_MS = 3_000;
 const STORAGE_KEY = "cubingAssistant.timerState";
 const LAYOUT_STORAGE_KEY = "cubingAssistant.layout";
 const LAST_SYNC_STORAGE_KEY = "cubingAssistant.lastAutoSync";
+const SYNC_DIRTY_STORAGE_KEY = "cubingAssistant.syncDirty";
 const ACCOUNT_SWITCH_STORAGE_KEY = "cubingAssistant.pendingAccountSwitch";
 const ACCOUNT_SWITCH_RESOLVED_STORAGE_KEY = "cubingAssistant.accountSwitchResolved";
 const SYNC_DEBOUNCE_MS = 1500;
+const DIRTY_SYNC_INTERVAL_MS = 30_000;
 const PLAYGROUND_SESSION_ID = "playground";
 const MOUSE_ONLY_NAVIGATION_SELECTOR = [
     "button",
@@ -90,6 +92,11 @@ const state = {
     scrambleFontSize: 1.9,
     syncReady: false,
     syncTimeout: null,
+    syncInterval: null,
+    syncRevision: 0,
+    syncedRevision: 0,
+    syncInFlight: false,
+    timesLoadingInterval: null,
     theme: {},
 };
 
@@ -102,10 +109,13 @@ async function init() {
     renderSessionOptions();
     bindEvents();
 
+    await switchSession(state.activeSessionId, {deferHistory: true});
     await pullRemoteState();
     state.syncReady = true;
+    state.syncInterval = window.setInterval(syncDirtyState, DIRTY_SYNC_INTERVAL_MS);
+    scheduleSync();
     renderSessionOptions();
-    await switchSession(state.activeSessionId);
+    render();
 }
 
 async function loadScrambles(eventId) {
@@ -564,7 +574,7 @@ function stopTimer(elapsed = performance.now() - state.startTime) {
         setScrambleIndex(clampScrambleIndex(getScrambleIndex() + 1));
     }
 
-    saveState();
+    saveState({sync: true});
     render();
 }
 
@@ -587,14 +597,14 @@ function renderRunningTimerValue(elapsed) {
 }
 
 function render() {
+    renderTimerState();
     renderScrambleFontSize();
     renderScramble();
-    renderScrambleDrawingVisibility();
     syncScrambleMinHeight();
-    renderTimerState();
+    enforceMouseOnlyNavigation();
     renderStats();
     renderTimes();
-    enforceMouseOnlyNavigation();
+    renderScrambleDrawingVisibility();
 }
 
 function renderScrambleDrawingVisibility() {
@@ -663,20 +673,24 @@ async function createSession() {
     };
 
     state.sessions.push(session);
+    saveState({sync: true});
     createSessionDialogEl.close();
     renderSessionOptions();
     await switchSession(session.id);
 }
 
-async function switchSession(sessionId) {
+async function switchSession(sessionId, {deferHistory = false} = {}) {
     const session = getVisibleSessions().find((entry) => entry.id === sessionId) || createPlaygroundSession();
     state.activeSessionId = session.id;
     sessionSelectEl.value = session.id;
     renderSessionEventControl();
-    await switchEvent(session.event || state.playgroundEvent, {updatePlayground: false});
+    await switchEvent(session.event || state.playgroundEvent, {updatePlayground: false, deferHistory});
 }
 
-async function switchEvent(eventId, {updatePlayground = isPlaygroundSession()} = {}) {
+async function switchEvent(eventId, {
+    updatePlayground = isPlaygroundSession(),
+    deferHistory = false,
+} = {}) {
     const nextEvent = getValidEventId(eventId);
     const previousEvent = state.activeEvent;
 
@@ -690,14 +704,19 @@ async function switchEvent(eventId, {updatePlayground = isPlaygroundSession()} =
     state.scrambles = [];
     scrambleEl.textContent = `Loading ${getEventLabel(nextEvent)} scrambles...`;
     scrambleCountEl.textContent = "0 / 0";
-    renderStats();
-    renderTimes();
+    if (deferHistory) {
+        renderTimesLoading();
+    } else {
+        renderStats();
+        renderTimes();
+    }
 
     try {
         state.scrambles = await loadScrambles(nextEvent);
         setScrambleIndex(clampScrambleIndex(getScrambleIndex()));
         saveState();
-        render();
+        if (deferHistory) renderBeforeHistory();
+        else render();
     } catch (error) {
         state.activeEvent = nextEvent;
         state.scrambles = [];
@@ -706,6 +725,15 @@ async function switchEvent(eventId, {updatePlayground = isPlaygroundSession()} =
         scrambleEl.textContent = error.message;
         statusEl.textContent = previousEvent === nextEvent ? "Add the scramble file, then reload or choose this event again" : "Add the scramble file, then choose this event again";
     }
+}
+
+function renderBeforeHistory() {
+    renderTimerState();
+    renderScrambleFontSize();
+    renderScramble();
+    syncScrambleMinHeight();
+    enforceMouseOnlyNavigation();
+    renderScrambleDrawingVisibility();
 }
 
 function createPlaygroundSession() {
@@ -841,6 +869,8 @@ function renderStatValueCell(cell, stat, column) {
 }
 
 function renderTimes() {
+    clearTimesLoading();
+    timesListEl.removeAttribute("aria-busy");
     timesListEl.replaceChildren();
     const activeSolves = getActiveSolves();
     const personalBestSolveIds = getRollingPersonalBestSolveIds(activeSolves);
@@ -978,6 +1008,29 @@ function renderTimes() {
     });
 }
 
+function renderTimesLoading() {
+    clearTimesLoading();
+    timesListEl.setAttribute("aria-busy", "true");
+    timesListEl.replaceChildren();
+
+    const loading = document.createElement("li");
+    loading.className = "empty";
+    timesListEl.append(loading);
+
+    let dotCount = 1;
+    const updateLabel = () => {
+        loading.textContent = `Loading solve history${".".repeat(dotCount)}`;
+        dotCount = dotCount === 3 ? 1 : dotCount + 1;
+    };
+    updateLabel();
+    state.timesLoadingInterval = window.setInterval(updateLabel, 450);
+}
+
+function clearTimesLoading() {
+    window.clearInterval(state.timesLoadingInterval);
+    state.timesLoadingInterval = null;
+}
+
 function showAverageDialog(label, column) {
     const stat = buildStats().find((entry) => entry.label === label);
     const average = stat?.inspectable ? stat[column] : null;
@@ -1050,8 +1103,11 @@ function getRollingPersonalBestSolveIds(solves) {
     return personalBestSolveIds;
 }
 
-function saveState() {
+function saveState({sync = false} = {}) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(createStoredState()),);
+    if (!sync) return;
+    state.syncRevision += 1;
+    localStorage.setItem(SYNC_DIRTY_STORAGE_KEY, String(Date.now()));
     scheduleSync();
 }
 
@@ -1075,6 +1131,9 @@ function loadSavedState() {
         state.drawingEnabled = saved.drawingEnabled !== false;
         state.timerUpdateMs = normalizeTimerUpdateMs(saved.timerUpdateMs);
         state.theme = saved.theme || {};
+        if (localStorage.getItem(SYNC_DIRTY_STORAGE_KEY)) {
+            state.syncRevision = 1;
+        }
     } catch {
         localStorage.removeItem(STORAGE_KEY);
     }
@@ -1153,7 +1212,7 @@ function editPhaseName(cell) {
             if (phaseNames.length) session.phaseNames = phaseNames;
             else delete session.phaseNames;
             session.updatedAt = Date.now();
-            saveState();
+            saveState({sync: true});
         }
         cell.textContent = save ? getPhaseName(session, phaseIndex) : originalName;
     };
@@ -1257,7 +1316,7 @@ function deleteSolve(solveId) {
     if (state.redoSolveId === solveId) {
         cancelRedo();
     }
-    saveState();
+    saveState({sync: true});
     render();
 }
 
@@ -1271,7 +1330,7 @@ function clearActiveSession() {
     });
     state.lastDisplayMs = 0;
     cancelRedo();
-    saveState();
+    saveState({sync: true});
     render();
 }
 
@@ -1282,14 +1341,23 @@ function updateSolvePenalty(solveId, penalty) {
 
     solve.penalty = normalizedPenalty;
     solve.updatedAt = Date.now();
-    saveState();
+    saveState({sync: true});
     render();
 }
 
 function scheduleSync() {
-    if (!state.syncReady || isAccountSwitchPending()) return;
+    if (!state.syncReady || !hasDirtySyncState() || isAccountSwitchPending()) return;
     window.clearTimeout(state.syncTimeout);
-    state.syncTimeout = window.setTimeout(pushRemoteState, SYNC_DEBOUNCE_MS);
+    state.syncTimeout = window.setTimeout(syncDirtyState, SYNC_DEBOUNCE_MS);
+}
+
+function hasDirtySyncState() {
+    return state.syncRevision > state.syncedRevision;
+}
+
+function syncDirtyState() {
+    if (!hasDirtySyncState()) return;
+    return pushRemoteState();
 }
 
 async function pullRemoteState() {
@@ -1306,20 +1374,29 @@ async function pullRemoteState() {
 }
 
 async function pushRemoteState() {
-    if (isAccountSwitchPending()) return;
+    if (!state.syncReady || !hasDirtySyncState() || state.syncInFlight || isAccountSwitchPending()) return;
+    const uploadRevision = state.syncRevision;
+    state.syncInFlight = true;
     try {
         const remote = await window.CubingAssistantSync.uploadSnapshot(createSyncSnapshot());
         mergeRemoteState(remote);
         markSyncCompleted();
+        state.syncedRevision = Math.max(state.syncedRevision, uploadRevision);
+        if (!hasDirtySyncState()) {
+            localStorage.removeItem(SYNC_DIRTY_STORAGE_KEY);
+        }
         localStorage.setItem(STORAGE_KEY, JSON.stringify(createStoredState()));
     } catch (error) {
         if (error.status === 401) return;
         // The next local mutation or page load retries synchronization.
+    } finally {
+        state.syncInFlight = false;
+        if (state.syncRevision > uploadRevision) scheduleSync();
     }
 }
 
 function flushSyncWithBeacon() {
-    if (!state.syncReady || isAccountSwitchPending() || !navigator.sendBeacon) return;
+    if (!state.syncReady || !hasDirtySyncState() || isAccountSwitchPending() || !navigator.sendBeacon) return;
     const payload = JSON.stringify(createSyncSnapshot());
     if (new Blob([payload]).size <= 1_250_000) {
         navigator.sendBeacon("/api/sync", payload);

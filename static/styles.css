@@ -22,6 +22,7 @@
     --times-width: 26rem;
     --main-min-width: 24rem;
     --times-min-width: 22rem;
+    --phase-count: 1;
 }
 
 * {
@@ -312,6 +313,7 @@ button[data-action="delete"]:hover {
     align-items: center;
     display: flex;
     gap: 14px;
+    margin-left: 25px;
     margin-right: auto;
 }
 

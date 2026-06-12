@@ -1,6 +1,7 @@
 const STORAGE_KEY = "cubingAssistant.timerState";
 const ACCOUNT_SWITCH_STORAGE_KEY = "cubingAssistant.pendingAccountSwitch";
 const ACCOUNT_SWITCH_RESOLVED_STORAGE_KEY = "cubingAssistant.accountSwitchResolved";
+const SYNC_DIRTY_STORAGE_KEY = "cubingAssistant.syncDirty";
 const PLAYGROUND_SESSION_ID = "playground";
 const EVENTS = [["222", "2x2"], ["333", "3x3"], ["444", "4x4"], ["555", "5x5"], ["666", "6x6"], ["777", "7x7"], ["333oh", "3x3 OH"], ["333bf", "3x3 Blindfolded"], ["333fm", "3x3 Fewest Moves"], ["333mbf", "3x3 Multi-Blind"], ["clock", "Clock"], ["minx", "Megaminx"], ["pyram", "Pyraminx"], ["skewb", "Skewb"], ["sq1", "Square-1"],];
 
@@ -100,7 +101,7 @@ function normalizeSessions(sessions) {
     return [playground, ...named];
 }
 
-function saveState() {
+function saveState({sync = true} = {}) {
     const raw = localStorage.getItem(STORAGE_KEY);
     let saved = {};
     try {
@@ -111,7 +112,10 @@ function saveState() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
         ...saved, sessions: state.sessions, solves: state.solves, sessionScrambleIndexes: state.sessionScrambleIndexes
     }));
-    pushRemoteState();
+    if (sync) {
+        localStorage.setItem(SYNC_DIRTY_STORAGE_KEY, String(Date.now()));
+        pushRemoteState();
+    }
 }
 
 function renderEventOptions() {
@@ -494,7 +498,7 @@ async function pullRemoteState() {
     if (localStorage.getItem(ACCOUNT_SWITCH_STORAGE_KEY)) return;
     try {
         mergeRemote(await window.CubingAssistantSync.downloadSnapshot());
-        saveState();
+        saveState({sync: false});
         render();
     } catch {
     }
@@ -510,6 +514,7 @@ async function pushRemoteState() {
             solves: state.solves,
             sessionScrambleIndexes: state.sessionScrambleIndexes
         }));
+        localStorage.removeItem(SYNC_DIRTY_STORAGE_KEY);
         render();
     } catch {
     }

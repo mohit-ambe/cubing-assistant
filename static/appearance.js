@@ -338,23 +338,6 @@ function saveTheme() {
         saved = {};
     }
     localStorage.setItem(STORAGE_KEY, JSON.stringify({...saved, theme}));
-    pushRemoteTheme();
-}
-
-async function pushRemoteTheme() {
-    if (localStorage.getItem("cubingAssistant.pendingAccountSwitch")) return;
-    try {
-        const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
-        await window.CubingAssistantSync.uploadSnapshot({
-            schemaVersion: 2,
-            updatedAt: Date.now(),
-            sessions: saved.sessions || [],
-            solves: saved.solves || [],
-            sessionScrambleIndexes: saved.sessionScrambleIndexes || {},
-            theme,
-        });
-    } catch {
-    }
 }
 
 function applyTheme(nextTheme) {
