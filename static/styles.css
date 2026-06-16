@@ -221,10 +221,6 @@ button[data-action="delete"]:hover {
     font: 500 12px/16px "JetBrains Mono", monospace;
 }
 
-.scramble-actions::before {
-    content: "Session:";
-}
-
 .scramble-controls {
     gap: 8px;
 }

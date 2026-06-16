@@ -43,7 +43,6 @@ const scrambleDrawingEl = document.querySelector("#scrambleDrawing");
 const scrambleDrawingPanelEl = document.querySelector(".scramble-drawing-panel");
 const scrambleDrawingHeadingEl = document.querySelector(".scramble-drawing-heading");
 const scrambleDrawingResizeEls = document.querySelectorAll(".scramble-drawing-resize");
-const scrambleCountEl = document.querySelector("#scrambleCount");
 const sessionSelectEl = document.querySelector("#sessionSelect");
 const createSessionEl = document.querySelector("#createSession");
 const eventSelectEl = document.querySelector("#eventSelect");
@@ -717,7 +716,6 @@ async function switchEvent(eventId, {
     state.lastDisplayMs = 0;
     state.scrambles = [];
     scrambleEl.textContent = `Loading ${getEventLabel(nextEvent)} scrambles...`;
-    scrambleCountEl.textContent = "0 / 0";
     if (deferHistory) {
         renderTimesLoading();
     } else {
@@ -772,7 +770,6 @@ function renderScramble() {
     const total = state.scrambles.length;
     const scramble = getCurrentScramble();
     scrambleEl.textContent = scramble || "No scramble loaded";
-    scrambleCountEl.textContent = getScrambleLabel(total);
     scrambleDrawingEl.setAttribute("event", state.activeEvent);
     scrambleDrawingEl.setAttribute("scramble", scramble);
 }
