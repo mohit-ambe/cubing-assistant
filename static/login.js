@@ -4,6 +4,8 @@ const ACCOUNT_SWITCH_STORAGE_KEY = "cubingAssistant.pendingAccountSwitch";
 const ACCOUNT_SWITCH_RESOLVED_STORAGE_KEY = "cubingAssistant.accountSwitchResolved";
 const TIMER_STORAGE_KEY = "cubingAssistant.timerState";
 const LAST_SYNC_STORAGE_KEY = "cubingAssistant.lastAutoSync";
+const LOCAL_STORAGE_PREFIX = "cubingAssistant.";
+const IMPORT_DB_NAME = "cubingAssistantImports";
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.appdata";
 const PLAYGROUND_SESSION_ID = "playground";
 
@@ -23,6 +25,15 @@ const conflictModeEl = document.querySelector("#conflictMode");
 const syncNowEl = document.querySelector("#syncNow");
 const uploadLocalEl = document.querySelector("#uploadLocal");
 const downloadDriveEl = document.querySelector("#downloadDrive");
+const deleteLocalDataEl = document.querySelector("#deleteLocalData");
+const deleteSyncDataEl = document.querySelector("#deleteSyncData");
+const hardDeleteStatusEl = document.querySelector("#hardDeleteStatus");
+const hardDeleteDialogEl = document.querySelector("#hardDeleteDialog");
+const hardDeleteTitleEl = document.querySelector("#hardDeleteTitle");
+const hardDeleteMessageEl = document.querySelector("#hardDeleteMessage");
+const hardDeleteDetailEl = document.querySelector("#hardDeleteDetail");
+const confirmHardDeleteEl = document.querySelector("#confirmHardDelete");
+const cancelHardDeleteEl = document.querySelector("#cancelHardDelete");
 const accountSwitchDialogEl = document.querySelector("#accountSwitchDialog");
 const accountSwitchMessageEl = document.querySelector("#accountSwitchMessage");
 const browserDataSummaryEl = document.querySelector("#browserDataSummary");
@@ -41,6 +52,9 @@ let pendingAccountSwitch = readJsonStorage(ACCOUNT_SWITCH_STORAGE_KEY);
 let pendingRemoteSnapshot = null;
 let resolvingAccountSwitch = false;
 let loadingAccountSwitch = false;
+let pendingHardDelete = null;
+let hardDeleteCountdownTimer = null;
+let hardDeleteBusy = false;
 
 window.handleCredentialResponse = handleCredentialResponse;
 
@@ -50,10 +64,21 @@ disconnectDriveEl.addEventListener("click", disconnectDrive);
 syncNowEl.addEventListener("click", syncNow);
 uploadLocalEl.addEventListener("click", uploadLocalData);
 downloadDriveEl.addEventListener("click", downloadFromDrive);
+deleteLocalDataEl.addEventListener("click", promptDeleteLocalData);
+deleteSyncDataEl.addEventListener("click", promptDeleteSyncData);
+confirmHardDeleteEl.addEventListener("click", confirmHardDelete);
+cancelHardDeleteEl.addEventListener("click", closeHardDeleteDialog);
 useAccountDataEl.addEventListener("click", useNewAccountData);
 mergeAccountDataEl.addEventListener("click", mergeSwitchedAccountData);
 cancelAccountSwitchEl.addEventListener("click", cancelAccountSwitch);
 accountSwitchDialogEl.addEventListener("cancel", (event) => event.preventDefault());
+hardDeleteDialogEl.addEventListener("cancel", (event) => {
+    if (hardDeleteBusy) {
+        event.preventDefault();
+        return;
+    }
+    closeHardDeleteDialog();
+});
 window.addEventListener("storage", (event) => {
     if (event.key === LAST_SYNC_STORAGE_KEY) {
         renderLastSynced();
@@ -233,6 +258,8 @@ function render() {
     uploadLocalEl.disabled = !canSync;
     downloadDriveEl.disabled = !canSync;
     conflictModeEl.disabled = !canSync;
+    deleteLocalDataEl.disabled = hardDeleteBusy;
+    deleteSyncDataEl.disabled = hardDeleteBusy || !canSync;
     renderLastSynced();
 
     if (!profile) {
@@ -307,6 +334,143 @@ function setManualSyncBusy(isBusy) {
     [syncNowEl, uploadLocalEl, downloadDriveEl, conflictModeEl].forEach((control) => {
         control.disabled = isBusy || !profile || !driveConnected;
     });
+    deleteSyncDataEl.disabled = isBusy || !profile || !driveConnected || Boolean(pendingAccountSwitch);
+}
+
+function promptDeleteLocalData() {
+    openHardDeleteDialog({
+        title: "Delete local data?",
+        message: "This removes Cubing Assistant data stored in this browser.",
+        detail: "Local solves, sessions, settings, sync metadata, staged imports, and this browser login are cleared. Google Drive sync data is not deleted.",
+        confirmLabel: "DELETE LOCAL",
+        action: deleteLocalData,
+    });
+}
+
+function promptDeleteSyncData() {
+    if (!profile || !driveConnected || pendingAccountSwitch) return;
+    openHardDeleteDialog({
+        title: "Delete synced data?",
+        message: "This removes Cubing Assistant files from the connected Google Drive sync store.",
+        detail: "Local browser data stays on this device. Upload local data again if you want Drive sync recreated afterward.",
+        confirmLabel: "DELETE SYNC",
+        action: deleteSyncData,
+    });
+}
+
+function openHardDeleteDialog(config) {
+    closeHardDeleteDialog();
+    pendingHardDelete = config;
+    hardDeleteTitleEl.textContent = config.title;
+    hardDeleteMessageEl.textContent = config.message;
+    hardDeleteDetailEl.textContent = config.detail;
+    cancelHardDeleteEl.disabled = false;
+    hardDeleteBusy = false;
+    const unlockAt = Date.now() + 5000;
+    const updateCountdown = () => {
+        const remaining = Math.ceil((unlockAt - Date.now()) / 1000);
+        if (remaining > 0) {
+            confirmHardDeleteEl.disabled = true;
+            confirmHardDeleteEl.textContent = `Confirm in ${remaining}`;
+            return;
+        }
+        window.clearInterval(hardDeleteCountdownTimer);
+        hardDeleteCountdownTimer = null;
+        confirmHardDeleteEl.disabled = false;
+        confirmHardDeleteEl.textContent = config.confirmLabel;
+    };
+    updateCountdown();
+    hardDeleteCountdownTimer = window.setInterval(updateCountdown, 200);
+    hardDeleteDialogEl.showModal();
+}
+
+function closeHardDeleteDialog() {
+    if (hardDeleteCountdownTimer) {
+        window.clearInterval(hardDeleteCountdownTimer);
+        hardDeleteCountdownTimer = null;
+    }
+    pendingHardDelete = null;
+    hardDeleteBusy = false;
+    confirmHardDeleteEl.disabled = true;
+    cancelHardDeleteEl.disabled = false;
+    if (hardDeleteDialogEl.open) {
+        hardDeleteDialogEl.close();
+    }
+}
+
+async function confirmHardDelete() {
+    if (!pendingHardDelete || confirmHardDeleteEl.disabled || hardDeleteBusy) return;
+    const action = pendingHardDelete.action;
+    hardDeleteBusy = true;
+    confirmHardDeleteEl.disabled = true;
+    confirmHardDeleteEl.textContent = "Deleting...";
+    cancelHardDeleteEl.disabled = true;
+    render();
+    try {
+        await action();
+        closeHardDeleteDialog();
+        render();
+    } catch (error) {
+        hardDeleteDetailEl.textContent = error.message;
+        cancelHardDeleteEl.disabled = false;
+        hardDeleteBusy = false;
+        render();
+    }
+}
+
+async function deleteLocalData() {
+    try {
+        await fetchJson("/api/auth/logout", {method: "POST"});
+    } catch {
+        // Browser data should still be removed if the backend is unavailable.
+    }
+    if (window.google?.accounts?.id) {
+        google.accounts.id.disableAutoSelect();
+    }
+    await deleteIndexedDb(IMPORT_DB_NAME);
+    clearAppStorage(localStorage);
+    clearAppStorage(sessionStorage);
+    profile = null;
+    driveConnected = false;
+    pendingAccountSwitch = null;
+    pendingRemoteSnapshot = null;
+    resolvingAccountSwitch = false;
+    loadingAccountSwitch = false;
+    hardDeleteStatusEl.textContent = "Local browser data deleted.";
+    manualSyncStatusEl.textContent = "Local browser data deleted.";
+    render();
+}
+
+async function deleteSyncData() {
+    if (!profile || !driveConnected || pendingAccountSwitch) return;
+    const result = await fetchJson("/api/google/appdata/delete", {method: "POST"});
+    localStorage.removeItem(LAST_SYNC_STORAGE_KEY);
+    const count = Number(result.deleted || 0);
+    const message = count === 1 ? "Deleted 1 Drive sync file." : `Deleted ${count} Drive sync files.`;
+    hardDeleteStatusEl.textContent = message;
+    manualSyncStatusEl.textContent = `${message} Local data is unchanged.`;
+    renderLastSynced();
+}
+
+function deleteIndexedDb(name) {
+    if (!("indexedDB" in window)) {
+        return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+        const request = indexedDB.deleteDatabase(name);
+        request.onsuccess = () => resolve();
+        request.onerror = () => resolve();
+        request.onblocked = () => resolve();
+    });
+}
+
+function clearAppStorage(storage) {
+    for (let index = storage.length - 1; index >= 0; index -= 1) {
+        const key = storage.key(index);
+        if (key?.startsWith(LOCAL_STORAGE_PREFIX)) {
+            storage.removeItem(key);
+        }
+    }
 }
 
 async function presentPendingAccountSwitch() {

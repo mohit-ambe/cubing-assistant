@@ -308,7 +308,37 @@ header {
     font-weight: 700;
 }
 
-.account-switch-dialog {
+.danger-zone {
+    border-top: 1px solid var(--outline);
+    display: grid;
+    gap: 12px;
+    margin-top: 8px;
+    padding-top: 18px;
+}
+
+.danger-actions {
+    display: grid;
+    gap: 8px;
+}
+
+.danger-button {
+    background: transparent;
+    border-color: rgba(255, 99, 82, .62);
+    color: var(--danger);
+    font-weight: 700;
+}
+
+.danger-button:hover {
+    background: rgba(255, 99, 82, .08);
+    border-color: var(--danger);
+}
+
+#hardDeleteStatus {
+    color: var(--muted);
+    font: 500 11px/16px "JetBrains Mono", monospace;
+}
+
+.account-switch-dialog, .hard-delete-dialog {
     background: var(--surface-low);
     border: 1px solid var(--outline);
     color: var(--text);
@@ -317,17 +347,17 @@ header {
     width: 100%;
 }
 
-.account-switch-dialog::backdrop {
+.account-switch-dialog::backdrop, .hard-delete-dialog::backdrop {
     background: rgba(0, 0, 0, .72);
 }
 
-.account-switch-content {
+.account-switch-content, .hard-delete-content {
     display: grid;
     gap: 20px;
     padding: 24px;
 }
 
-.account-switch-heading {
+.account-switch-heading, .hard-delete-heading {
     align-items: start;
     display: flex;
     gap: 12px;
@@ -338,12 +368,17 @@ header {
     font-size: 26px;
 }
 
-.account-switch-heading div {
+.hard-delete-heading > .material-symbols-outlined {
+    color: var(--danger);
+    font-size: 26px;
+}
+
+.account-switch-heading div, .hard-delete-heading div {
     display: grid;
     gap: 8px;
 }
 
-.account-switch-heading h2 {
+.account-switch-heading h2, .hard-delete-heading h2 {
     color: var(--text);
     font: 700 18px/24px Inter, sans-serif;
     letter-spacing: 0;
@@ -405,6 +440,25 @@ header {
 .account-switch-actions {
     display: grid;
     gap: 8px;
+}
+
+.hard-delete-detail {
+    border-bottom: 1px solid var(--outline);
+    border-top: 1px solid var(--outline);
+    font-size: 12px;
+    padding: 16px 0;
+}
+
+.hard-delete-actions {
+    display: grid;
+    gap: 8px;
+}
+
+.hard-delete-confirm {
+    background: var(--danger);
+    border-color: var(--danger);
+    color: #270502;
+    font-weight: 700;
 }
 
 .account-switch-primary {

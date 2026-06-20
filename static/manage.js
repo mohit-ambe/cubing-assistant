@@ -524,8 +524,9 @@ async function processIndexedImport(job) {
             if (!selected || selected.action === "skip") return null;
             return convertCstimerSolve(entry.sourceKey, selected.event, selected.sessionId, entry.rawSolve, job.importedAt);
         }))).filter(Boolean);
+        const importSolves = restoreDeletedImportedSolves(converted);
         const sessions = buildImportSessions(job.sessions);
-        if (converted.length || (job.processedSolves === 0 && sessions.length)) {
+        if (importSolves.length || (job.processedSolves === 0 && sessions.length)) {
             let result;
             if (job.syncToDrive) {
                 const response = await fetch("/api/import-batches", {
@@ -535,20 +536,21 @@ async function processIndexedImport(job) {
                         schemaVersion: 2,
                         updatedAt: Date.now(),
                         sessions,
-                        solves: converted,
+                        solves: importSolves,
                         sessionScrambleIndexes: {},
                         theme: getStoredTheme(),
+                        importMode: true,
                     }),
                 });
                 result = await response.json().catch(() => ({}));
                 if (!response.ok) throw new Error(result.error || `Import batch failed (${response.status}).`);
             } else {
-                result = applyLocalImportBatch(sessions, converted);
+                result = applyLocalImportBatch(sessions, importSolves);
             }
             job.result.created += Number(result.created || 0);
             job.result.added += Number(result.added || 0);
             job.result.duplicates += Number(result.duplicates || 0);
-            mergeRemote({sessions, solves: converted});
+            mergeRemote({sessions, solves: importSolves});
             saveState({sync: !job.syncToDrive});
         }
         job.processedSolves += rawBatch.length;
@@ -586,19 +588,53 @@ async function importShouldSyncToDrive() {
 
 function applyLocalImportBatch(sessions, solves) {
     const existingSessionIds = new Set(state.sessions.map((session) => session.id));
-    const existingSolveIds = new Set(state.solves.map((solve) => solve.id));
+    const existingSolves = new Map(state.solves.filter((solve) => solve.id).map((solve) => [solve.id, solve]));
+    const seenSolveIds = new Set();
     const created = sessions.filter((session) => !existingSessionIds.has(session.id)).length;
     let added = 0;
     let duplicates = 0;
     solves.forEach((solve) => {
-        if (existingSolveIds.has(solve.id)) {
+        if (seenSolveIds.has(solve.id)) {
+            duplicates += 1;
+            return;
+        }
+        seenSolveIds.add(solve.id);
+        const existing = existingSolves.get(solve.id);
+        if (existing && !existing.deletedAt) {
             duplicates += 1;
         } else {
-            existingSolveIds.add(solve.id);
             added += 1;
         }
     });
     return {created, added, duplicates};
+}
+
+function restoreDeletedImportedSolves(solves) {
+    const existingSolves = new Map(state.solves.filter((solve) => solve.id).map((solve) => [solve.id, solve]));
+    const now = Date.now();
+    return solves.map((solve) => {
+        const existing = existingSolves.get(solve.id);
+        if (!existing) return solve;
+        if (!existing.deletedAt && solve.phaseTimesMs?.length && !existing.phaseTimesMs?.length) {
+            return {
+                ...existing,
+                phaseTimesMs: solve.phaseTimesMs,
+                source: {
+                    ...(existing.source || {}),
+                    ...(solve.source?.cstimerCumulativeSplitsMs ? {
+                        cstimerCumulativeSplitsMs: solve.source.cstimerCumulativeSplitsMs,
+                    } : {}),
+                },
+                updatedAt: Math.max(now, updatedAt(existing) + 1, updatedAt(solve) + 1),
+            };
+        }
+        if (!existing.deletedAt) return solve;
+        const {deletedAt, redoneAt, ...restored} = solve;
+        return {
+            ...restored,
+            updatedAt: Math.max(now, updatedAt(existing) + 1, updatedAt(solve) + 1),
+        };
+    });
 }
 
 function buildImportSessions(configuredSessions) {

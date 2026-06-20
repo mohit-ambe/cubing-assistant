@@ -526,6 +526,41 @@ def find_drive_snapshot(subject):
     return files[0]["id"] if files else None
 
 
+def list_drive_appdata_files(subject):
+    files = []
+    page_token = None
+    while True:
+        query = {
+            "spaces": "appDataFolder",
+            "q": "name contains 'cubing-assistant'",
+            "fields": "nextPageToken,files(id,name)",
+        }
+        if page_token:
+            query["pageToken"] = page_token
+        response = drive_request(subject, f"https://www.googleapis.com/drive/v3/files?{urlencode(query)}")
+        files.extend(response.get("files", []))
+        page_token = response.get("nextPageToken")
+        if not page_token:
+            return files
+
+
+def delete_drive_appdata_files(subject):
+    deleted = []
+    for file in list_drive_appdata_files(subject):
+        file_id = file.get("id")
+        if not file_id:
+            continue
+        drive_request(subject, f"https://www.googleapis.com/drive/v3/files/{quote(file_id, safe='')}", method="DELETE")
+        deleted.append({
+            "id": file_id,
+            "name": file.get("name", ""),
+        })
+    return {
+        "deleted": len(deleted),
+        "files": deleted,
+    }
+
+
 def read_drive_snapshot(subject):
     file_id = find_drive_snapshot(subject)
     if not file_id:
@@ -595,20 +630,37 @@ def sync_drive_snapshot(subject, incoming, mode):
         return merged
 
 
-def merge_import_batch(subject, incoming, mode="newest"):
+def merge_import_batch(subject, incoming, mode="newest", import_mode=False):
     with drive_subject_lock(subject):
         remote = read_drive_snapshot(subject)
-        existing_solve_ids = {solve.get("id") for solve in remote.get("solves", []) if solve.get("id")}
+        existing_solves = {solve.get("id"): solve for solve in remote.get("solves", []) if solve.get("id")}
         incoming_solves = [solve for solve in incoming.get("solves", []) if solve.get("id")]
-        seen_solve_ids = set(existing_solve_ids)
+        seen_solve_ids = set()
+        now = int(time.time() * 1000)
         added = 0
         duplicates = 0
+        enriched = 0
         for solve in incoming_solves:
             if solve["id"] in seen_solve_ids:
                 duplicates += 1
-            else:
-                seen_solve_ids.add(solve["id"])
-                added += 1
+                continue
+            seen_solve_ids.add(solve["id"])
+            existing = existing_solves.get(solve["id"])
+            if existing and not (import_mode and existing.get("deletedAt")):
+                if import_mode and solve.get("phaseTimesMs") and not existing.get("phaseTimesMs"):
+                    existing["phaseTimesMs"] = solve["phaseTimesMs"]
+                    if solve.get("source", {}).get("cstimerCumulativeSplitsMs"):
+                        existing.setdefault("source", {})["cstimerCumulativeSplitsMs"] = solve["source"][
+                            "cstimerCumulativeSplitsMs"]
+                    existing["updatedAt"] = max(now, record_updated_at(existing) + 1, record_updated_at(solve) + 1)
+                    enriched += 1
+                duplicates += 1
+                continue
+            if existing and import_mode and existing.get("deletedAt"):
+                solve.pop("deletedAt", None)
+                solve.pop("redoneAt", None)
+                solve["updatedAt"] = max(now, record_updated_at(existing) + 1, record_updated_at(solve) + 1)
+            added += 1
         existing_session_ids = {session.get("id") for session in remote.get("sessions", []) if session.get("id")}
         incoming_sessions = [session for session in incoming.get("sessions", []) if session.get("id")]
         created = sum(session["id"] not in existing_session_ids for session in incoming_sessions)
@@ -618,6 +670,7 @@ def merge_import_batch(subject, incoming, mode="newest"):
             "added": added,
             "duplicates": duplicates,
             "created": created,
+            "enriched": enriched,
         }
 
 
@@ -1081,6 +1134,7 @@ def build_import_snapshot(job, configuration):
     duplicates = 0
     enriched = 0
     offset = 0
+    now = int(time.time() * 1000)
     while True:
         with import_db() as connection:
             rows = connection.execute("""
@@ -1096,6 +1150,15 @@ def build_import_snapshot(job, configuration):
             solve = json.loads(row["payload_json"])
             existing = existing_solves.get(row["solve_id"])
             if existing:
+                if existing.get("deletedAt"):
+                    solve.pop("deletedAt", None)
+                    solve.pop("redoneAt", None)
+                    solve["updatedAt"] = max(now, record_updated_at(existing) + 1, record_updated_at(solve) + 1)
+                    existing.clear()
+                    existing.update(solve)
+                    session_id = solve.get("sessionId")
+                    added_by_session[session_id] = added_by_session.get(session_id, 0) + 1
+                    continue
                 if solve.get("phaseTimesMs") and not existing.get("phaseTimesMs"):
                     existing["phaseTimesMs"] = solve["phaseTimesMs"]
                     existing.setdefault("source", {}).update({
@@ -1115,7 +1178,6 @@ def build_import_snapshot(job, configuration):
 
     existing_sessions = existing_session_ids
     created = 0
-    now = int(time.time() * 1000)
     for session in remote.get("sessions", []):
         phase_count = phase_counts_by_session.get(session.get("id"))
         if phase_count and not session.get("phaseCount"):
@@ -1740,6 +1802,23 @@ async def drive_disconnect(request: Request):
     }
 
 
+@app.delete("/api/google/appdata")
+async def drive_delete_appdata(request: Request):
+    session = await require_session(request)
+    connected = await run_in_threadpool(get_user_tokens, session["sub"])
+    if not connected:
+        raise ApiError("Connect Google Drive before deleting synced data.", 409)
+    try:
+        return await run_in_threadpool(delete_drive_appdata_files, session["sub"])
+    except RuntimeError as error:
+        raise ApiError(str(error)) from error
+
+
+@app.post("/api/google/appdata/delete")
+async def drive_delete_appdata_post(request: Request):
+    return await drive_delete_appdata(request)
+
+
 @app.post("/api/imports")
 async def create_import(request: Request):
     require_import_storage()
@@ -1903,6 +1982,7 @@ async def import_batch(request: Request):
         raise ApiError("Connect Google Drive before importing.", 409)
     incoming = await read_json_body(request)
     mode = incoming.pop("mode", "newest")
+    import_mode = bool(incoming.pop("importMode", False))
     if mode not in {"newest", "local", "drive"}:
         mode = "newest"
     if not isinstance(incoming.get("sessions", []), list) or not isinstance(incoming.get("solves", []), list):
@@ -1910,7 +1990,7 @@ async def import_batch(request: Request):
     if len(incoming.get("solves", [])) > STATELESS_BATCH_MAX_SOLVES:
         raise ApiError(f"Import batches may contain at most {STATELESS_BATCH_MAX_SOLVES} solves.", 413)
     try:
-        return await run_in_threadpool(merge_import_batch, session["sub"], incoming, mode)
+        return await run_in_threadpool(merge_import_batch, session["sub"], incoming, mode, import_mode)
     except RuntimeError as error:
         raise ApiError(str(error)) from error
 

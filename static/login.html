@@ -94,6 +94,13 @@
                 </button>
             </div>
         </div>
+        <div class="danger-zone">
+            <div class="danger-actions">
+                <button class="danger-button" id="deleteLocalData" type="button">DELETE LOCAL</button>
+                <button class="danger-button" disabled id="deleteSyncData" type="button">DELETE SYNC</button>
+            </div>
+            <p id="hardDeleteStatus"></p>
+        </div>
     </section>
 </main>
 
@@ -129,6 +136,23 @@
             </button>
             <button disabled id="mergeAccountData" type="button">Merge both</button>
             <button class="account-switch-cancel" id="cancelAccountSwitch" type="button">Cancel</button>
+        </div>
+    </div>
+</dialog>
+
+<dialog class="hard-delete-dialog" id="hardDeleteDialog">
+    <div class="hard-delete-content">
+        <div class="hard-delete-heading">
+            <span aria-hidden="true" class="material-symbols-outlined">warning</span>
+            <div>
+                <h2 id="hardDeleteTitle"></h2>
+                <p id="hardDeleteMessage"></p>
+            </div>
+        </div>
+        <p class="hard-delete-detail" id="hardDeleteDetail"></p>
+        <div class="hard-delete-actions">
+            <button class="hard-delete-confirm" disabled id="confirmHardDelete" type="button">Confirm in 5</button>
+            <button id="cancelHardDelete" type="button">Cancel</button>
         </div>
     </div>
 </dialog>
