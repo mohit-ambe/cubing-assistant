@@ -14,6 +14,8 @@ const DIRTY_SYNC_INTERVAL_MS = 30_000;
 const PLAYGROUND_SESSION_ID = "playground";
 const DEFAULT_TIMES_MIN_WIDTH_PX = 352;
 const RESIZE_HANDLE_WIDTH_PX = 16;
+const DEFAULT_SCRAMBLE_DRAWING_WIDTH_PX = 288;
+const MIN_SCRAMBLE_DRAWING_WIDTH_PX = 192;
 const MOUSE_ONLY_NAVIGATION_SELECTOR = [
     "button",
     "select",
@@ -1644,11 +1646,10 @@ function onResizeStart(event) {
 function onScrambleDrawingDragStart(event) {
     if (event.button !== 0) return;
     const panelRect = scrambleDrawingPanelEl.getBoundingClientRect();
-    const timerRect = timerPanelEl.getBoundingClientRect();
     const startX = event.clientX;
     const startY = event.clientY;
-    const startLeft = panelRect.left - timerRect.left;
-    const startTop = panelRect.top - timerRect.top;
+    const startLeft = panelRect.left;
+    const startTop = panelRect.top;
 
     event.preventDefault();
     scrambleDrawingHeadingEl.setPointerCapture(event.pointerId);
@@ -1691,7 +1692,7 @@ function onScrambleDrawingResizeStart(event) {
         const widthDelta = (moveEvent.clientX - startX) * (resizeFromLeft ? -1 : 1);
         const heightDelta = (moveEvent.clientY - startY) * (resizeFromTop ? -1 : 1) * 1.5;
         const dominantDelta = Math.abs(widthDelta) > Math.abs(heightDelta) ? widthDelta : heightDelta;
-        const desiredWidth = Math.max(192, startWidth + dominantDelta);
+        const desiredWidth = Math.max(MIN_SCRAMBLE_DRAWING_WIDTH_PX, startWidth + dominantDelta);
         const maxWidth = getScrambleDrawingMaxWidthForCorner(startLeft, startTop, startWidth, startHeight, corner);
         const width = Math.min(desiredWidth, maxWidth);
         const height = getScrambleDrawingHeightForWidth(width);
@@ -1712,15 +1713,19 @@ function onScrambleDrawingResizeStart(event) {
 }
 
 function setScrambleDrawingPosition(left, top) {
-    const maxLeft = Math.max(0, timerPanelEl.clientWidth - scrambleDrawingPanelEl.offsetWidth);
-    const maxTop = Math.max(0, timerPanelEl.clientHeight - scrambleDrawingPanelEl.offsetHeight);
-    scrambleDrawingPanelEl.style.left = `${clamp(left, 0, maxLeft)}px`;
+    const minLeft = getCssPixelValue("--side-tabs-width") || 0;
+    const maxLeft = Math.max(minLeft, window.innerWidth - scrambleDrawingPanelEl.offsetWidth);
+    const maxTop = Math.max(0, window.innerHeight - scrambleDrawingPanelEl.offsetHeight);
+    scrambleDrawingPanelEl.style.left = `${clamp(left, minLeft, maxLeft)}px`;
     scrambleDrawingPanelEl.style.top = `${clamp(top, 0, maxTop)}px`;
     scrambleDrawingPanelEl.style.bottom = "auto";
 }
 
 function constrainScrambleDrawing() {
-    setScrambleDrawingSize(Math.min(scrambleDrawingPanelEl.offsetWidth, getScrambleDrawingMaxWidth()));
+    const currentWidth = scrambleDrawingPanelEl.offsetWidth || DEFAULT_SCRAMBLE_DRAWING_WIDTH_PX;
+    if (currentWidth > getScrambleDrawingMaxWidth()) {
+        setScrambleDrawingSize(Math.max(MIN_SCRAMBLE_DRAWING_WIDTH_PX, getScrambleDrawingMaxWidth()));
+    }
     setScrambleDrawingPosition(scrambleDrawingPanelEl.offsetLeft, scrambleDrawingPanelEl.offsetTop);
 }
 
@@ -1780,13 +1785,15 @@ function getScrambleDrawingHeightForWidth(width) {
 }
 
 function getScrambleDrawingMaxWidth() {
-    const maxByHeight = Math.max(0, (timerPanelEl.clientHeight - scrambleDrawingHeadingEl.offsetHeight - 2) * 1.5);
-    return Math.max(0, Math.min(timerPanelEl.clientWidth, maxByHeight));
+    const minLeft = getCssPixelValue("--side-tabs-width") || 0;
+    const maxByHeight = Math.max(0, (window.innerHeight - scrambleDrawingHeadingEl.offsetHeight - 2) * 1.5);
+    return Math.max(0, Math.min(window.innerWidth - minLeft, maxByHeight));
 }
 
 function getScrambleDrawingMaxWidthForCorner(left, top, width, height, corner) {
-    const availableWidth = corner.includes("w") ? left + width : timerPanelEl.clientWidth - left;
-    const availableHeight = corner.includes("n") ? top + height : timerPanelEl.clientHeight - top;
+    const minLeft = getCssPixelValue("--side-tabs-width") || 0;
+    const availableWidth = corner.includes("w") ? left + width - minLeft : window.innerWidth - left;
+    const availableHeight = corner.includes("n") ? top + height : window.innerHeight - top;
     return Math.max(0, Math.min(availableWidth, (availableHeight - scrambleDrawingHeadingEl.offsetHeight - 2) * 1.5));
 }
 
