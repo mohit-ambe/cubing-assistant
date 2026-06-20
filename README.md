@@ -1,1 +1,1 @@
-![](static%2Ffavicon.svg)
+![](logo%2Flogo_small.png)
