@@ -35,6 +35,7 @@ const state = {
     sessions: [],
     solves: [],
     sessionScrambleIndexes: {},
+    statsConfig: null,
     selectedSessionId: PLAYGROUND_SESSION_ID,
     stagedSessions: [],
     importJobId: null,
@@ -111,6 +112,7 @@ function loadState() {
     state.sessions = normalizeSessions(saved.sessions);
     state.solves = Array.isArray(saved.solves) ? saved.solves : [];
     state.sessionScrambleIndexes = saved.sessionScrambleIndexes || {};
+    state.statsConfig = Array.isArray(saved.statsConfig) ? saved.statsConfig : null;
     state.selectedSessionId = getVisibleSessions().some((session) => session.id === saved.activeSessionId) ? saved.activeSessionId : PLAYGROUND_SESSION_ID;
 }
 
@@ -129,7 +131,11 @@ function saveState({sync = true} = {}) {
         saved = {};
     }
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
-        ...saved, sessions: state.sessions, solves: state.solves, sessionScrambleIndexes: state.sessionScrambleIndexes
+        ...saved,
+        sessions: state.sessions,
+        solves: state.solves,
+        sessionScrambleIndexes: state.sessionScrambleIndexes,
+        ...(state.statsConfig ? {statsConfig: state.statsConfig} : {}),
     }));
     if (sync) {
         localStorage.setItem(SYNC_DIRTY_STORAGE_KEY, String(Date.now()));
@@ -874,7 +880,8 @@ async function pushRemoteState() {
             ...JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}"),
             sessions: state.sessions,
             solves: state.solves,
-            sessionScrambleIndexes: state.sessionScrambleIndexes
+            sessionScrambleIndexes: state.sessionScrambleIndexes,
+            ...(state.statsConfig ? {statsConfig: state.statsConfig} : {}),
         }));
         localStorage.removeItem(SYNC_DIRTY_STORAGE_KEY);
         render();
@@ -886,6 +893,7 @@ function mergeRemote(remote) {
     state.solves = mergeById(state.solves, remote.solves || []);
     state.sessions = normalizeSessions(mergeById(state.sessions, remote.sessions || []));
     state.sessionScrambleIndexes = {...state.sessionScrambleIndexes, ...(remote.sessionScrambleIndexes || {})};
+    if (Array.isArray(remote.statsConfig)) state.statsConfig = remote.statsConfig;
 }
 
 function mergeById(left, right) {
@@ -909,6 +917,7 @@ function createSnapshot() {
         sessions: state.sessions,
         solves: state.solves,
         sessionScrambleIndexes: state.sessionScrambleIndexes,
+        ...(state.statsConfig ? {statsConfig: state.statsConfig} : {}),
         theme: getStoredTheme()
     };
 }

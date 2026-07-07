@@ -16,6 +16,13 @@ const DEFAULT_TIMES_MIN_WIDTH_PX = 352;
 const RESIZE_HANDLE_WIDTH_PX = 16;
 const DEFAULT_SCRAMBLE_DRAWING_WIDTH_PX = 288;
 const MIN_SCRAMBLE_DRAWING_WIDTH_PX = 192;
+const SINGLE_STAT_CONFIG = {id: "single", type: "mean", size: 1};
+const DEFAULT_STATS_CONFIG = [
+    {id: "mo3", type: "mean", size: 3},
+    {id: "ao5", type: "average", size: 5, trimValue: 1, trimUnit: "solves"},
+    {id: "ao12", type: "average", size: 12, trimValue: 1, trimUnit: "solves"},
+    {id: "ao100", type: "average", size: 100, trimValue: 5, trimUnit: "percent"},
+];
 const MOUSE_ONLY_NAVIGATION_SELECTOR = [
     "button",
     "select",
@@ -55,6 +62,13 @@ const resetLayoutEl = document.querySelector("#resetLayout");
 const decreaseScrambleFontEl = document.querySelector("#decreaseScrambleFont");
 const increaseScrambleFontEl = document.querySelector("#increaseScrambleFont");
 const statsBodyEl = document.querySelector("#statsBody");
+const editStatsEl = document.querySelector("#editStats");
+const statsEditorDialogEl = document.querySelector("#statsEditorDialog");
+const statsEditorListEl = document.querySelector("#statsEditorList");
+const newStatTypeEl = document.querySelector("#newStatType");
+const newStatSizeEl = document.querySelector("#newStatSize");
+const addStatEl = document.querySelector("#addStat");
+const statsEditorStatusEl = document.querySelector("#statsEditorStatus");
 const timesListEl = document.querySelector("#timesList");
 const exportTimesEl = document.querySelector("#exportTimes");
 const clearTimesEl = document.querySelector("#clearTimes");
@@ -97,6 +111,7 @@ const state = {
     redoSolveId: null,
     redoScramble: "",
     scrambleFontSize: 1.9,
+    statsConfig: createDefaultStatsConfig(),
     syncReady: false,
     syncTimeout: null,
     syncInterval: null,
@@ -240,6 +255,16 @@ function bindEvents() {
     });
 
     exportTimesEl.addEventListener("click", exportActiveSession);
+    editStatsEl.addEventListener("click", openStatsEditor);
+    addStatEl.addEventListener("click", addConfiguredStat);
+    newStatTypeEl.addEventListener("change", syncNewStatSizeMinimum);
+    statsEditorListEl.addEventListener("click", (event) => {
+        const button = event.target.closest("button[data-remove-stat]");
+        if (!button) return;
+        removeConfiguredStat(button.dataset.removeStat);
+    });
+    statsEditorListEl.addEventListener("change", onStatsEditorConfigChange);
+    statsEditorListEl.addEventListener("pointerdown", onStatsEditorPointerDown);
 
     clearTimesEl.addEventListener("click", () => {
         if (state.timerState === "running" || isInspectionState()) return;
@@ -874,11 +899,227 @@ function renderStatValueCell(cell, stat, column) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "stat-average-button";
-    button.dataset.statAverage = stat.label;
+    button.dataset.statAverage = stat.id;
     button.dataset.statColumn = column;
     button.textContent = text;
     makeMouseOnlyControl(button);
     cell.append(button);
+}
+
+function openStatsEditor() {
+    statsEditorStatusEl.textContent = "";
+    syncNewStatSizeMinimum();
+    renderStatsEditor();
+    statsEditorDialogEl.showModal();
+}
+
+function renderStatsEditor() {
+    statsEditorListEl.replaceChildren();
+    state.statsConfig.forEach((config) => {
+        const item = document.createElement("li");
+        item.className = "stats-editor-item";
+        item.dataset.statId = config.id;
+
+        const handle = document.createElement("span");
+        handle.className = "stats-drag-handle";
+        handle.title = "Drag to reorder";
+        handle.dataset.dragStat = config.id;
+        handle.setAttribute("role", "button");
+        handle.setAttribute("aria-label", `Drag ${getStatLabel(config)}`);
+        handle.innerHTML = "<span class=\"material-symbols-outlined\" aria-hidden=\"true\">menu</span>";
+
+        const label = document.createElement("span");
+        label.className = "stats-editor-label";
+        label.textContent = getStatLabel(config);
+
+        const trimValue = document.createElement("input");
+        trimValue.className = "stats-trim-input";
+        trimValue.type = "number";
+        trimValue.min = "0";
+        trimValue.step = "1";
+        trimValue.inputMode = "numeric";
+        trimValue.value = String(config.type === "average" ? config.trimValue : 0);
+        trimValue.disabled = config.type !== "average";
+        trimValue.dataset.statTrimValue = config.id;
+        trimValue.setAttribute("aria-label", `${getStatLabel(config)} trim amount`);
+        makeMouseOnlyControl(trimValue);
+
+        const trimUnit = document.createElement("select");
+        trimUnit.className = "stats-trim-unit";
+        trimUnit.disabled = config.type !== "average";
+        trimUnit.dataset.statTrimUnit = config.id;
+        trimUnit.setAttribute("aria-label", `${getStatLabel(config)} trim unit`);
+        trimUnit.append(new Option("solves", "solves"), new Option("%", "percent"));
+        trimUnit.value = config.type === "average" ? config.trimUnit : "solves";
+        makeMouseOnlyControl(trimUnit);
+
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "stats-remove-button";
+        remove.title = "Remove stat";
+        remove.setAttribute("aria-label", `Remove ${getStatLabel(config)}`);
+        remove.dataset.removeStat = config.id;
+        remove.innerHTML = "<span class=\"material-symbols-outlined\" aria-hidden=\"true\">close</span>";
+        makeMouseOnlyControl(remove);
+
+        item.append(handle, label, trimValue, trimUnit, remove);
+        statsEditorListEl.append(item);
+    });
+}
+
+function addConfiguredStat() {
+    syncNewStatSizeMinimum();
+    const type = newStatTypeEl.value === "average" ? "average" : "mean";
+    const size = normalizeStatSize(newStatSizeEl.value, type);
+    if (!size) {
+        statsEditorStatusEl.textContent = type === "average"
+            ? "Averages need at least 3 solves."
+            : "Means need at least 2 solves.";
+        return;
+    }
+
+    state.statsConfig.push({
+        id: crypto.randomUUID(),
+        type,
+        size,
+        ...(type === "average" ? {trimValue: 1, trimUnit: "solves"} : {}),
+    });
+    statsEditorStatusEl.textContent = "";
+    commitStatsConfig();
+}
+
+function syncNewStatSizeMinimum() {
+    const minimum = newStatTypeEl.value === "average" ? 3 : 2;
+    newStatSizeEl.min = String(minimum);
+    if (Number(newStatSizeEl.value) < minimum) {
+        newStatSizeEl.value = String(minimum);
+    }
+}
+
+function onStatsEditorConfigChange(event) {
+    const trimValueControl = event.target.closest("[data-stat-trim-value]");
+    const trimUnitControl = event.target.closest("[data-stat-trim-unit]");
+    const id = trimValueControl?.dataset.statTrimValue || trimUnitControl?.dataset.statTrimUnit;
+    if (!id) return;
+
+    state.statsConfig = state.statsConfig.map((config) => {
+        if (config.id !== id || config.type !== "average") return config;
+        return normalizeStatConfig({
+            ...config,
+            ...(trimValueControl ? {trimValue: trimValueControl.value} : {}),
+            ...(trimUnitControl ? {trimUnit: trimUnitControl.value} : {}),
+        });
+    });
+    statsEditorStatusEl.textContent = "";
+    commitStatsConfig();
+}
+
+function removeConfiguredStat(id) {
+    state.statsConfig = state.statsConfig.filter((config) => config.id !== id);
+    statsEditorStatusEl.textContent = "";
+    commitStatsConfig();
+}
+
+function onStatsEditorPointerDown(event) {
+    const handle = event.target.closest("[data-drag-stat]");
+    if (!handle || event.button !== 0) return;
+    const draggedId = handle.dataset.dragStat;
+    const draggedItem = handle.closest(".stats-editor-item");
+    if (!draggedId || !draggedItem) return;
+
+    event.preventDefault();
+    draggedItem.classList.add("dragging");
+    updateStatsEditorDropIndicator(draggedId, null);
+    document.body.classList.add("stats-dragging");
+
+    function onPointerMove(moveEvent) {
+        const target = getStatsEditorDragTarget(draggedId, moveEvent.clientY);
+        if (!target) return;
+        const {targetId, placeAfter} = target;
+        updateStatsEditorDropIndicator(draggedId, target);
+        reorderConfiguredStat(draggedId, targetId, placeAfter, false);
+        const currentDraggedItem = statsEditorListEl.querySelector(`[data-stat-id="${CSS.escape(draggedId)}"]`);
+        const targetItem = statsEditorListEl.querySelector(`[data-stat-id="${CSS.escape(targetId)}"]`);
+        if (currentDraggedItem && targetItem) {
+            statsEditorListEl.insertBefore(currentDraggedItem, placeAfter ? targetItem.nextSibling : targetItem);
+            currentDraggedItem.classList.add("dragging");
+        }
+    }
+
+    function onPointerEnd() {
+        document.body.classList.remove("stats-dragging");
+        clearStatsEditorDropIndicator();
+        statsEditorListEl.querySelectorAll(".stats-editor-item.dragging").forEach((item) => {
+            item.classList.remove("dragging");
+        });
+        commitStatsConfig();
+        window.removeEventListener("pointermove", onPointerMove);
+        window.removeEventListener("pointerup", onPointerEnd);
+        window.removeEventListener("pointercancel", onPointerEnd);
+    }
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerEnd);
+    window.addEventListener("pointercancel", onPointerEnd);
+}
+
+function updateStatsEditorDropIndicator(draggedId, target) {
+    clearStatsEditorDropIndicator();
+    if (!target) return;
+    const targetItem = statsEditorListEl.querySelector(`[data-stat-id="${CSS.escape(target.targetId)}"]`);
+    if (!targetItem || target.targetId === draggedId) return;
+    targetItem.classList.add(target.placeAfter ? "drop-after" : "drop-before");
+}
+
+function clearStatsEditorDropIndicator() {
+    statsEditorListEl.querySelectorAll(".drop-before, .drop-after").forEach((item) => {
+        item.classList.remove("drop-before", "drop-after");
+    });
+}
+
+function getStatsEditorDragTarget(draggedId, pointerY) {
+    const items = [...statsEditorListEl.querySelectorAll(".stats-editor-item")]
+        .filter((item) => item.dataset.statId !== draggedId);
+    for (const item of items) {
+        const rect = item.getBoundingClientRect();
+        if (pointerY >= rect.top && pointerY <= rect.bottom) {
+            return {
+                targetId: item.dataset.statId,
+                placeAfter: pointerY > rect.top + rect.height / 2,
+            };
+        }
+    }
+    const first = items[0];
+    const last = items.at(-1);
+    if (first && pointerY < first.getBoundingClientRect().top) {
+        return {targetId: first.dataset.statId, placeAfter: false};
+    }
+    if (last && pointerY > last.getBoundingClientRect().bottom) {
+        return {targetId: last.dataset.statId, placeAfter: true};
+    }
+    return null;
+}
+
+function reorderConfiguredStat(draggedId, targetId, placeAfter = false, commit = true) {
+    const configs = [...state.statsConfig];
+    const fromIndex = configs.findIndex((config) => config.id === draggedId);
+    const toIndex = configs.findIndex((config) => config.id === targetId);
+    if (fromIndex < 0 || toIndex < 0) return;
+    const [moved] = configs.splice(fromIndex, 1);
+    const adjustedTargetIndex = configs.findIndex((config) => config.id === targetId);
+    configs.splice(adjustedTargetIndex + (placeAfter ? 1 : 0), 0, moved);
+    state.statsConfig = configs;
+    if (commit) {
+        commitStatsConfig();
+    }
+}
+
+function commitStatsConfig() {
+    state.statsConfig = normalizeStatsConfig(state.statsConfig);
+    saveState({sync: true});
+    renderStats();
+    renderStatsEditor();
+    syncTimesPanelMinWidth();
 }
 
 function renderTimes() {
@@ -1049,26 +1290,26 @@ function clearTimesLoading() {
     state.timesLoadingInterval = null;
 }
 
-function showAverageDialog(label, column) {
-    const stat = buildStats().find((entry) => entry.label === label);
+function showAverageDialog(statId, column) {
+    const stat = buildStats().find((entry) => entry.id === statId);
     const average = stat?.inspectable ? stat[column] : null;
     if (!average?.solves?.length) return;
 
-    const {bestId, worstId} = getAverageExtremes(average.solves);
+    const trimmedIds = getAverageTrimmedSolveIds(average.solves, stat.trimCount);
     const columnLabel = column === "best" ? "Best" : "Current";
     const averageText = formatAverageValue(average.value);
-    averageDialogTitleEl.textContent = `${columnLabel} ${label} ${averageText}`;
+    averageDialogTitleEl.textContent = `${columnLabel} ${stat.label} ${averageText}`;
     averageDialogTimesEl.replaceChildren();
 
     average.solves.forEach((solve) => {
         const item = document.createElement("li");
-        item.classList.toggle("average-best", stat.trimsExtremes && solve.id === bestId);
-        item.classList.toggle("average-worst", stat.trimsExtremes && solve.id === worstId);
-        item.textContent = formatAverageSolveLine(solve, stat.trimsExtremes ? bestId : "", stat.trimsExtremes ? worstId : "");
+        item.classList.toggle("average-best", trimmedIds.best.has(solve.id));
+        item.classList.toggle("average-worst", trimmedIds.worst.has(solve.id));
+        item.textContent = formatAverageSolveLine(solve, trimmedIds);
         averageDialogTimesEl.append(item);
     });
 
-    averageDialogLog = [`${columnLabel} ${label} of ${averageText} on ${getEventLabel(getActiveEvent())}:`, "", ...average.solves.map((solve) => formatAverageSolveLine(solve, stat.trimsExtremes ? bestId : "", stat.trimsExtremes ? worstId : "")),].join("\n");
+    averageDialogLog = [`${columnLabel} ${stat.label} of ${averageText} on ${getEventLabel(getActiveEvent())}:`, "", ...average.solves.map((solve) => formatAverageSolveLine(solve, trimmedIds)),].join("\n");
 
     averageDialogEl.showModal();
 }
@@ -1085,23 +1326,20 @@ async function copyAverageLog() {
     statusEl.textContent = "Average log copied";
 }
 
-function formatAverageSolveLine(solve, bestId, worstId) {
+function formatAverageSolveLine(solve, trimmedIds) {
     const penalty = getPenaltyText(solve);
     const line = `${formatSolveTime(solve)}${penalty ? ` ${penalty}` : ""}`;
-    return solve.id === bestId || solve.id === worstId ? `(${line})` : line;
+    return trimmedIds.best.has(solve.id) || trimmedIds.worst.has(solve.id) ? `(${line})` : line;
 }
 
-function getAverageExtremes(solves) {
-    let best = null;
-    let worst = null;
-
-    solves.forEach((solve) => {
-        const value = getAdjustedTime(solve);
-        if (!best || value < best.value) best = {id: solve.id, value};
-        if (!worst || value > worst.value) worst = {id: solve.id, value};
-    });
-
-    return {bestId: best?.id || "", worstId: worst?.id || ""};
+function getAverageTrimmedSolveIds(solves, trimCount) {
+    const best = new Set();
+    const worst = new Set();
+    if (!trimCount) return {best, worst};
+    const sorted = [...solves].sort((left, right) => getAdjustedTime(left) - getAdjustedTime(right));
+    sorted.slice(0, trimCount).forEach((solve) => best.add(solve.id));
+    sorted.slice(-trimCount).forEach((solve) => worst.add(solve.id));
+    return {best, worst};
 }
 
 function getRollingPersonalBestSolveIds(solves) {
@@ -1145,6 +1383,7 @@ function loadSavedState() {
         })) : [];
         state.lastDisplayMs = Number(saved.lastDisplayMs) || 0;
         state.scrambleFontSize = clamp(Number(saved.scrambleFontSize) || 1.9, 0.9, 3.2);
+        state.statsConfig = normalizeStatsConfig(saved.statsConfig);
         state.inspectionEnabled = Boolean(saved.inspectionEnabled);
         state.drawingEnabled = saved.drawingEnabled !== false;
         state.timerUpdateMs = normalizeTimerUpdateMs(saved.timerUpdateMs);
@@ -1437,6 +1676,7 @@ function createSyncSnapshot() {
         sessions: state.sessions,
         sessionScrambleIndexes: state.sessionScrambleIndexes,
         solves: state.solves,
+        statsConfig: state.statsConfig,
         theme: state.theme,
     };
 }
@@ -1451,6 +1691,7 @@ function createStoredState() {
         solves: state.solves,
         lastDisplayMs: state.lastDisplayMs,
         scrambleFontSize: state.scrambleFontSize,
+        statsConfig: state.statsConfig,
         inspectionEnabled: state.inspectionEnabled,
         drawingEnabled: state.drawingEnabled,
         timerUpdateMs: state.timerUpdateMs,
@@ -1476,6 +1717,9 @@ function mergeRemoteState(remote) {
     if (remote.theme && Number(remote.theme.updatedAt || 0) >= Number(state.theme.updatedAt || 0)) {
         state.theme = remote.theme;
         window.CubingAssistantTheme?.applyTheme(state.theme);
+    }
+    if (Array.isArray(remote.statsConfig)) {
+        state.statsConfig = normalizeStatsConfig(remote.statsConfig);
     }
     renderSessionOptions();
 }
@@ -1866,10 +2110,15 @@ function normalizeTimerUpdateMs(value) {
 }
 
 function buildStats() {
-    return [buildStatRow("single", 1, calculateMean, false, false), buildStatRow("mo3", 3, calculateMean, true, false), buildStatRow("ao5", 5, calculateAverage, true, true), buildStatRow("ao12", 12, calculateAverage, true, true), buildStatRow("ao100", 100, calculateAverage, true, true),];
+    return [SINGLE_STAT_CONFIG, ...state.statsConfig].map(buildStatRow);
 }
 
-function buildStatRow(label, size, calculator, inspectable, trimsExtremes) {
+function buildStatRow(config) {
+    const label = getStatLabel(config);
+    const size = config.size;
+    const calculator = config.type === "average"
+        ? (solves) => calculateAverage(solves, config)
+        : calculateMean;
     const windows = getStatWindows(size, calculator);
     const best = windows.reduce((bestWindow, window) => {
         if (!bestWindow || window.value < bestWindow.value) return window;
@@ -1877,8 +2126,57 @@ function buildStatRow(label, size, calculator, inspectable, trimsExtremes) {
     }, null);
 
     return {
-        label, inspectable, trimsExtremes, current: windows.length ? windows[windows.length - 1] : null, best,
+        id: config.id,
+        label,
+        inspectable: config.size > 1,
+        trimsExtremes: config.type === "average",
+        trimCount: config.type === "average" ? getAverageTrimCount(config.size, config) : 0,
+        current: windows.length ? windows[windows.length - 1] : null,
+        best,
     };
+}
+
+function getStatLabel(config) {
+    if (config.type === "mean" && config.size === 1) return "Single";
+    return `${config.type === "average" ? "ao" : "mo"}${config.size}`;
+}
+
+function createDefaultStatsConfig() {
+    return DEFAULT_STATS_CONFIG.map((config) => ({...config}));
+}
+
+function normalizeStatsConfig(configs) {
+    if (!Array.isArray(configs)) return createDefaultStatsConfig();
+    const normalized = configs.map(normalizeStatConfig).filter(Boolean);
+    return normalized;
+}
+
+function normalizeStatConfig(config) {
+    const type = config?.type === "average" ? "average" : "mean";
+    const size = normalizeStatSize(config?.size, type);
+    if (!size) return null;
+    const normalized = {
+        id: typeof config.id === "string" && config.id ? config.id : crypto.randomUUID(),
+        type,
+        size,
+    };
+    if (type === "average") {
+        normalized.trimUnit = config.trimUnit === "percent" ? "percent" : "solves";
+        normalized.trimValue = config.trimValue === undefined ? 1 : normalizeTrimValue(config.trimValue);
+    }
+    return normalized;
+}
+
+function normalizeStatSize(value, type) {
+    const size = Math.round(Number(value));
+    if (!Number.isFinite(size)) return 0;
+    const min = type === "average" ? 3 : 2;
+    return size >= min ? size : 0;
+}
+
+function normalizeTrimValue(value) {
+    const trimValue = Math.round(Number(value));
+    return Number.isFinite(trimValue) && trimValue > 0 ? trimValue : 0;
 }
 
 function getStatWindows(size, calculator) {
@@ -1896,15 +2194,28 @@ function getStatWindows(size, calculator) {
 }
 
 function calculateMean(solves) {
-    const total = solves.reduce((sum, solve) => sum + getAdjustedTime(solve), 0);
-    return total / solves.length;
+    const times = solves.map(getAdjustedTime);
+    const validTimes = times.filter(Number.isFinite);
+    if (!validTimes.length) return Infinity;
+    const validMean = validTimes.reduce((sum, time) => sum + time, 0) / validTimes.length;
+    const total = times.reduce((sum, time) => sum + (Number.isFinite(time) ? time : validMean), 0);
+    return total / times.length;
 }
 
-function calculateAverage(solves) {
+function calculateAverage(solves, config) {
     const times = solves.map(getAdjustedTime).sort((a, b) => a - b);
-    const trimmed = times.slice(1, -1);
+    const trimCount = getAverageTrimCount(solves.length, config);
+    const trimmed = times.slice(trimCount, times.length - trimCount);
+    if (!trimmed.length) return Infinity;
     const total = trimmed.reduce((sum, time) => sum + time, 0);
     return total / trimmed.length;
+}
+
+function getAverageTrimCount(size, config) {
+    const rawTrim = config.trimUnit === "percent"
+        ? Math.floor(size * normalizeTrimValue(config.trimValue) / 100)
+        : normalizeTrimValue(config.trimValue);
+    return clamp(rawTrim, 0, Math.floor((size - 1) / 2));
 }
 
 function getAdjustedTime(solve) {

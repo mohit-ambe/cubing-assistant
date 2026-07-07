@@ -716,12 +716,17 @@ def merge_snapshots(left, right, mode="newest"):
     left_theme = left.get("theme") or {}
     right_theme = right.get("theme") or {}
     theme = choose_record(left_theme, right_theme, mode) if (left_theme or right_theme) else {}
+    left_stats_config = left.get("statsConfig") if isinstance(left.get("statsConfig"), list) else None
+    right_stats_config = right.get("statsConfig") if isinstance(right.get("statsConfig"), list) else None
+    stats_config = left_stats_config if mode == "drive" else right_stats_config
+    stats_config = stats_config or right_stats_config or left_stats_config
     return {
         "schemaVersion": 2,
         "updatedAt": int(time.time() * 1000),
         "sessions": list(sessions.values()),
         "sessionScrambleIndexes": session_scramble_indexes,
         "solves": list(merged_solves.values()),
+        "statsConfig": stats_config or [],
         "theme": theme,
     }
 

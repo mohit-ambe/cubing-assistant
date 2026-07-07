@@ -121,6 +121,8 @@
             <div class="times-actions">
                 <button aria-label="Export data" id="exportTimes" title="Export data" type="button"><span
                         class="material-symbols-outlined">ios_share</span></button>
+                <button aria-label="Edit stats" id="editStats" title="Edit stats" type="button"><span
+                        class="material-symbols-outlined">edit</span></button>
                 <button aria-label="Clear session" id="clearTimes" title="Clear session" type="button"><span
                         class="material-symbols-outlined">delete_sweep</span></button>
             </div>
@@ -169,6 +171,33 @@
         <div class="dialog-actions">
             <button type="submit" value="cancel">Cancel</button>
             <button id="confirmCreateSession" type="submit" value="confirm">Create</button>
+        </div>
+    </form>
+</dialog>
+
+<dialog class="confirm-dialog stats-editor-dialog" id="statsEditorDialog">
+    <form method="dialog">
+        <h2>Stats</h2>
+        <div aria-hidden="true" class="stats-editor-columns">
+            <span></span>
+            <span>Stat</span>
+            <span>Trim</span>
+            <span>Unit</span>
+            <span></span>
+        </div>
+        <ol class="stats-editor-list" id="statsEditorList"></ol>
+        <div class="stats-add-row">
+            <select aria-label="Stat type" id="newStatType">
+                <option value="mean">Mean</option>
+                <option value="average">Average</option>
+            </select>
+            <input aria-label="Number of solves" id="newStatSize" inputmode="numeric" min="2" step="1" type="number"
+                   value="3">
+            <button id="addStat" type="button">Add</button>
+        </div>
+        <p class="stats-editor-status" id="statsEditorStatus"></p>
+        <div class="dialog-actions">
+            <button type="submit" value="close">Done</button>
         </div>
     </form>
 </dialog>

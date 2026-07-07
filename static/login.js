@@ -640,6 +640,7 @@ function createLocalSnapshot() {
         sessions: normalizeSessions(saved.sessions),
         sessionScrambleIndexes: saved.sessionScrambleIndexes || {},
         solves: Array.isArray(saved.solves) ? saved.solves : [],
+        statsConfig: Array.isArray(saved.statsConfig) ? saved.statsConfig : undefined,
         theme: saved.theme || {},
     };
 }
@@ -651,6 +652,7 @@ function applySnapshot(snapshot) {
         sessions: normalizeSessions(snapshot.sessions),
         sessionScrambleIndexes: snapshot.sessionScrambleIndexes || {},
         solves: Array.isArray(snapshot.solves) ? snapshot.solves : [],
+        statsConfig: Array.isArray(snapshot.statsConfig) ? snapshot.statsConfig : saved.statsConfig,
         theme: snapshot.theme || saved.theme || {},
     };
     localStorage.setItem(TIMER_STORAGE_KEY, JSON.stringify(next));
@@ -664,8 +666,16 @@ function mergeSnapshots(local, drive, mode) {
         sessions: mergeRecordsById(local.sessions || [], drive.sessions || [], mode, "session"),
         sessionScrambleIndexes: mode === "drive" ? {...(local.sessionScrambleIndexes || {}), ...(drive.sessionScrambleIndexes || {})} : {...(drive.sessionScrambleIndexes || {}), ...(local.sessionScrambleIndexes || {})},
         solves: mergeRecordsById(local.solves || [], drive.solves || [], mode, "solve"),
+        statsConfig: chooseStatsConfig(local.statsConfig, drive.statsConfig, mode),
         theme: chooseRecord(local.theme || {}, drive.theme || {}, mode),
     };
+}
+
+function chooseStatsConfig(localConfig, driveConfig, mode) {
+    const local = Array.isArray(localConfig) ? localConfig : null;
+    const drive = Array.isArray(driveConfig) ? driveConfig : null;
+    if (mode === "drive") return drive || local || undefined;
+    return local || drive || undefined;
 }
 
 function mergeRecordsById(localRecords, driveRecords, mode, type) {

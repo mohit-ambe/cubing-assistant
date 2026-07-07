@@ -2,6 +2,13 @@ const STORAGE_KEY = "cubingAssistant.timerState";
 const ACCOUNT_SWITCH_STORAGE_KEY = "cubingAssistant.pendingAccountSwitch";
 const ACCOUNT_SWITCH_RESOLVED_STORAGE_KEY = "cubingAssistant.accountSwitchResolved";
 
+const SINGLE_STAT_CONFIG = {id: "single", type: "mean", size: 1};
+const DEFAULT_STATS_CONFIG = [
+    {id: "mo3", type: "mean", size: 3},
+    {id: "ao5", type: "average", size: 5, trimValue: 1, trimUnit: "solves"},
+    {id: "ao12", type: "average", size: 12, trimValue: 1, trimUnit: "solves"},
+    {id: "ao100", type: "average", size: 100, trimValue: 1, trimUnit: "solves"},
+];
 const EVENTS = [["222", "2x2"], ["333", "3x3"], ["444", "4x4"], ["555", "5x5"], ["666", "6x6"], ["777", "7x7"], ["333oh", "3x3 OH"], ["333bf", "3x3 Blindfolded"], ["333fm", "3x3 Fewest Moves"], ["333mbf", "3x3 Multi-Blind"], ["clock", "Clock"], ["minx", "Megaminx"], ["pyram", "Pyraminx"], ["skewb", "Skewb"], ["sq1", "Square-1"],];
 
 const scopeFilterEl = document.querySelector("#scopeFilter");
@@ -25,6 +32,7 @@ const formatsMetaEl = document.querySelector("#formatsMeta");
 const state = {
     solves: [],
     sessions: [],
+    statsConfig: createDefaultStatsConfig(),
 };
 
 window.addEventListener("storage", (event) => {
@@ -39,6 +47,7 @@ async function init() {
     loadAnalyticsState();
     renderScopeOptions();
     renderTimePartOptions();
+    renderRollingOptions();
     bindEvents();
     render();
     await pullRemoteState();
@@ -65,12 +74,14 @@ function loadAnalyticsState() {
     if (!raw) {
         state.solves = [];
         state.sessions = [];
+        state.statsConfig = createDefaultStatsConfig();
         return;
     }
 
     try {
         const saved = JSON.parse(raw);
         state.sessions = Array.isArray(saved.sessions) ? saved.sessions : [];
+        state.statsConfig = normalizeStatsConfig(saved.statsConfig);
         state.solves = (Array.isArray(saved.solves) ? saved.solves : [])
             .filter((solve) => !solve.deletedAt && Number.isFinite(Number(solve.timeMs)) && Number.isFinite(Number(solve.createdAt)))
             .map((solve) => ({
@@ -84,34 +95,37 @@ function loadAnalyticsState() {
     } catch {
         state.solves = [];
         state.sessions = [];
+        state.statsConfig = createDefaultStatsConfig();
     }
 }
 
 function renderScopeOptions() {
-    const selectedValue = scopeValueFilterEl.value || "all";
+    const selectedValue = scopeValueFilterEl.value;
     const mode = scopeFilterEl.value;
     let options;
     if (mode === "session") {
         const seenSessionIds = new Set(state.solves.map((solve) => solve.sessionId || "playground"));
-        options = [
-            ["all", "All"],
-            ...state.sessions
-                .filter((session) => !session.deletedAt && seenSessionIds.has(session.id))
-                .map((session) => [session.id, session.name || "Unnamed session"]),
-        ];
+        options = state.sessions
+            .filter((session) => !session.deletedAt && seenSessionIds.has(session.id))
+            .map((session) => [session.id, session.name || "Unnamed session"]);
+        if (!options.length) {
+            options = state.sessions
+                .filter((session) => !session.deletedAt)
+                .map((session) => [session.id, session.name || "Unnamed session"]);
+        }
     } else {
         const seenEvents = new Set(state.solves.map((solve) => solve.event));
-        options = [["all", "All"], ...EVENTS.filter(([eventId]) => seenEvents.has(eventId))];
-        if (options.length === 1) options.push(["333", "3x3"]);
+        options = EVENTS.filter(([eventId]) => seenEvents.has(eventId));
+        if (!options.length) options.push(["333", "3x3"]);
     }
     scopeValueFilterEl.replaceChildren();
     options.forEach(([value, label]) => scopeValueFilterEl.append(new Option(label, value)));
-    scopeValueFilterEl.value = options.some(([value]) => value === selectedValue) ? selectedValue : "all";
+    scopeValueFilterEl.value = options.some(([value]) => value === selectedValue) ? selectedValue : options[0]?.[0] || "";
 }
 
 function renderTimePartOptions() {
     const selected = timePartFilterEl.value || "final";
-    const isSpecificSession = scopeFilterEl.value === "session" && scopeValueFilterEl.value !== "all";
+    const isSpecificSession = scopeFilterEl.value === "session" && Boolean(scopeValueFilterEl.value);
     const selectedSession = isSpecificSession
         ? state.sessions.find((session) => session.id === scopeValueFilterEl.value)
         : null;
@@ -127,6 +141,69 @@ function renderTimePartOptions() {
     timePartFilterEl.value = [...timePartFilterEl.options].some((option) => option.value === selected)
         ? selected
         : "final";
+}
+
+function renderRollingOptions() {
+    const selected = rollingFilterEl.value || "ao100";
+    const rollingStats = getRollingStats();
+    rollingFilterEl.replaceChildren();
+    rollingStats.forEach((stat) => {
+        rollingFilterEl.append(new Option(getStatLabel(stat), stat.id));
+    });
+    rollingFilterEl.value = rollingStats.some((stat) => stat.id === selected)
+        ? selected
+        : rollingStats[0]?.id || "single";
+}
+
+function getRollingStats() {
+    return [SINGLE_STAT_CONFIG, ...state.statsConfig].filter((stat) => stat.size > 1);
+}
+
+function getSelectedRollingStat() {
+    const selected = rollingFilterEl.value;
+    return getRollingStats().find((stat) => stat.id === selected) || getRollingStats()[0] || SINGLE_STAT_CONFIG;
+}
+
+function getStatLabel(config) {
+    if (config.type === "mean" && config.size === 1) return "Single";
+    return `${config.type === "average" ? "ao" : "mo"}${config.size}`;
+}
+
+function createDefaultStatsConfig() {
+    return DEFAULT_STATS_CONFIG.map((config) => ({...config}));
+}
+
+function normalizeStatsConfig(configs) {
+    if (!Array.isArray(configs)) return createDefaultStatsConfig();
+    return configs.map(normalizeStatConfig).filter(Boolean);
+}
+
+function normalizeStatConfig(config) {
+    const type = config?.type === "average" ? "average" : "mean";
+    const size = normalizeStatSize(config?.size, type);
+    if (!size) return null;
+    const normalized = {
+        id: typeof config.id === "string" && config.id ? config.id : crypto.randomUUID(),
+        type,
+        size,
+    };
+    if (type === "average") {
+        normalized.trimUnit = config.trimUnit === "percent" ? "percent" : "solves";
+        normalized.trimValue = config.trimValue === undefined ? 1 : normalizeTrimValue(config.trimValue);
+    }
+    return normalized;
+}
+
+function normalizeStatSize(value, type) {
+    const size = Math.round(Number(value));
+    if (!Number.isFinite(size)) return 0;
+    const min = type === "average" ? 3 : 2;
+    return size >= min ? size : 0;
+}
+
+function normalizeTrimValue(value) {
+    const trimValue = Math.round(Number(value));
+    return Number.isFinite(trimValue) && trimValue > 0 ? trimValue : 0;
 }
 
 async function pullRemoteState() {
@@ -145,11 +222,15 @@ async function pullRemoteState() {
         saved.sessionScrambleIndexes = {
             ...(saved.sessionScrambleIndexes || {}), ...(remote.sessionScrambleIndexes || {}),
         };
+        if (Array.isArray(remote.statsConfig)) {
+            saved.statsConfig = remote.statsConfig;
+        }
         localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
 
         loadAnalyticsState();
         renderScopeOptions();
         renderTimePartOptions();
+        renderRollingOptions();
         render();
     } catch {
         // Analytics remains available with local data while offline or disconnected.
@@ -186,11 +267,11 @@ function mergeSessions(left, right) {
 
 function render() {
     const filteredSolves = getFilteredSolves();
-    const rollingSize = Number(rollingFilterEl.value);
+    const rollingStat = getSelectedRollingStat();
 
     renderSummary(filteredSolves);
-    renderStatCards(filteredSolves);
-    renderTrendChart(filteredSolves, rollingSize);
+    renderStatCards(filteredSolves, rollingStat);
+    renderTrendChart(filteredSolves, rollingStat);
     renderDistributionChart(filteredSolves);
     renderDailyChart(filteredSolves);
     renderEventChart(filteredSolves);
@@ -199,8 +280,8 @@ function render() {
 function getFilteredSolves() {
     const mode = scopeFilterEl.value;
     const selectedValue = scopeValueFilterEl.value;
+    if (!selectedValue) return [];
     const scoped = state.solves.filter((solve) => {
-        if (selectedValue === "all") return true;
         if (mode === "session") return (solve.sessionId || "playground") === selectedValue;
         return solve.event === selectedValue;
     });
@@ -215,18 +296,17 @@ function getRangeFilteredSolves(solves) {
 }
 
 function renderSummary(solves) {
-    const selected = scopeValueFilterEl.options[scopeValueFilterEl.selectedIndex]?.textContent || "All";
+    const selected = scopeValueFilterEl.options[scopeValueFilterEl.selectedIndex]?.textContent || "No selection";
     summaryLineEl.textContent = `${solves.length} solves shown for ${selected}`;
 }
 
-function renderStatCards(solves) {
+function renderStatCards(solves, rollingStat = getSelectedRollingStat()) {
     const validTimes = solves.map(getAdjustedTime).filter(Number.isFinite);
     const bestAo5Day = bestAverageDay(solves, 5);
     const activeDayCount = groupByDay(solves).length;
     const bestSingle = bestSingleContext(solves);
-    const rollingSize = Number(rollingFilterEl.value);
-    const bestRolling = bestAverageContext(solves, rollingSize);
-    const cards = [["Solves", String(solves.length), activeDayCount ? `${formatDecimal(solves.length / activeDayCount)} / day` : "-- / day"], ["Best Single", formatMaybeTime(Math.min(...validTimes)), bestSingle ? formatStatDate(bestSingle.timestamp) : "--"], ["Average", formatMaybeTime(calculateAverage(solves))], [`Best ao${rollingSize}`, formatMaybeTime(bestRolling?.value), bestRolling ? formatStatDate(bestRolling.timestamp) : "--"], ["Active days", String(activeDayCount), `${formatDuration(totalSolveTime(solves))}, ${formatDuration(totalSolveTime(solves) / activeDayCount)} / day`], ["Best day", bestAo5Day ? formatBestDayDate(bestAo5Day.timestamp) : "--", bestAo5Day ? `ao5 ${formatTime(bestAo5Day.value)}` : "ao5 --"],];
+    const bestRolling = bestRollingContext(solves, rollingStat);
+    const cards = [["Solves", String(solves.length), activeDayCount ? `${formatDecimal(solves.length / activeDayCount)} / day` : "-- / day"], ["Best Single", formatMaybeTime(Math.min(...validTimes)), bestSingle ? formatStatDate(bestSingle.timestamp) : "--"], ["Average", formatMaybeTime(calculateAverage(solves, {type: "average", size: solves.length, trimValue: 1, trimUnit: "solves"}))], [`Best ${getStatLabel(rollingStat)}`, formatMaybeTime(bestRolling?.value), bestRolling ? formatStatDate(bestRolling.timestamp) : "--"], ["Active days", String(activeDayCount), `${formatDuration(totalSolveTime(solves))}, ${formatDuration(totalSolveTime(solves) / activeDayCount)} / day`], ["Best day", bestAo5Day ? formatBestDayDate(bestAo5Day.timestamp) : "--", bestAo5Day ? `ao5 ${formatTime(bestAo5Day.value)}` : "ao5 --"],];
 
     statCardsEl.replaceChildren();
     cards.forEach(([label, value, detail]) => {
@@ -241,14 +321,14 @@ function renderStatCards(solves) {
     });
 }
 
-function renderTrendChart(solves, rollingSize) {
+function renderTrendChart(solves, rollingStat) {
     const orderedSolves = [...solves].sort((left, right) => Number(left.createdAt || 0) - Number(right.createdAt || 0));
     const byDate = dateTimelineEl.checked;
     const validSolves = orderedSolves
         .filter((solve) => Number.isFinite(getAdjustedTime(solve)))
         .map((solve, index) => ({solve, x: byDate ? solve.createdAt : index}));
-    const rolling = rollingSeries(orderedSolves, rollingSize, byDate);
-    trendMetaEl.textContent = `raw solves and ao${rollingSize}`;
+    const rolling = rollingSeries(orderedSolves, rollingStat, byDate);
+    trendMetaEl.textContent = `raw solves and ${getStatLabel(rollingStat)}`;
 
     if (validSolves.length === 0) {
         renderEmpty(trendChartEl, "No valid solves in this range");
@@ -625,14 +705,15 @@ function formatTimeAxisLabel(timestamp, span) {
     }).format(date);
 }
 
-function rollingSeries(solves, size, byDate = true) {
+function rollingSeries(solves, stat, byDate = true) {
     const eligibleSolves = getAverageEligibleSolves(solves);
+    const size = stat.size;
     if (eligibleSolves.length < size) return [];
 
     const points = [];
     for (let index = 0; index <= eligibleSolves.length - size; index += 1) {
         const window = eligibleSolves.slice(index, index + size);
-        const value = calculateAverage(window);
+        const value = calculateStatValue(window, stat);
         if (Number.isFinite(value)) {
             points.push({
                 x: byDate ? window[window.length - 1].createdAt : index + size - 1,
@@ -660,28 +741,50 @@ function getRollingPersonalBestSolveIds(solves) {
     return personalBestSolveIds;
 }
 
-function calculateAverage(solves) {
+function calculateStatValue(solves, stat) {
+    return stat.type === "average" ? calculateAverage(solves, stat) : calculateMean(solves);
+}
+
+function calculateMean(solves) {
+    const times = getAverageEligibleSolves(solves).map(getAdjustedTime);
+    const validTimes = times.filter(Number.isFinite);
+    if (!validTimes.length) return Infinity;
+    const validMean = mean(validTimes);
+    return mean(times.map((time) => Number.isFinite(time) ? time : validMean));
+}
+
+function calculateAverage(solves, stat = {type: "average", size: solves.length, trimValue: 1, trimUnit: "solves"}) {
     const times = getAverageEligibleSolves(solves).map(getAdjustedTime).sort((a, b) => a - b);
     if (times.length === 0) return Infinity;
-    if (times.length < 3) return mean(times);
-    const trimmed = times.slice(1, -1);
+    const trimCount = getAverageTrimCount(times.length, stat);
+    const trimmed = times.slice(trimCount, times.length - trimCount);
+    if (!trimmed.length) return Infinity;
     if (trimmed.some((time) => !Number.isFinite(time))) return Infinity;
     return mean(trimmed);
 }
 
-function currentAverage(solves, size) {
-    const eligibleSolves = getAverageEligibleSolves(solves);
-    if (eligibleSolves.length < size) return Infinity;
-    return calculateAverage(eligibleSolves.slice(-size));
+function getAverageTrimCount(size, stat) {
+    const rawTrim = stat.trimUnit === "percent"
+        ? Math.floor(size * normalizeTrimValue(stat.trimValue) / 100)
+        : normalizeTrimValue(stat.trimValue);
+    return clamp(rawTrim, 0, Math.floor((size - 1) / 2));
 }
 
-function bestAverage(solves, size) {
+function currentRolling(solves, stat) {
     const eligibleSolves = getAverageEligibleSolves(solves);
+    const size = stat.size;
+    if (eligibleSolves.length < size) return Infinity;
+    return calculateStatValue(eligibleSolves.slice(-size), stat);
+}
+
+function bestRolling(solves, stat) {
+    const eligibleSolves = getAverageEligibleSolves(solves);
+    const size = stat.size;
     if (eligibleSolves.length < size) return Infinity;
 
     let best = Infinity;
     for (let index = 0; index <= eligibleSolves.length - size; index += 1) {
-        best = Math.min(best, calculateAverage(eligibleSolves.slice(index, index + size)));
+        best = Math.min(best, calculateStatValue(eligibleSolves.slice(index, index + size), stat));
     }
     return best;
 }
@@ -698,14 +801,15 @@ function bestSingleContext(solves) {
     return best;
 }
 
-function bestAverageContext(solves, size) {
+function bestRollingContext(solves, stat) {
     const eligibleSolves = getAverageEligibleSolves(solves);
+    const size = stat.size;
     if (eligibleSolves.length < size) return null;
 
     let best = null;
     for (let index = 0; index <= eligibleSolves.length - size; index += 1) {
         const window = eligibleSolves.slice(index, index + size);
-        const value = calculateAverage(window);
+        const value = calculateStatValue(window, stat);
         if (!Number.isFinite(value)) continue;
         if (!best || value < best.value) {
             best = {
@@ -717,6 +821,7 @@ function bestAverageContext(solves, size) {
 }
 
 function bestAverageDay(solves, size) {
+    const stat = {type: "average", size, trimValue: 1, trimUnit: "solves"};
     const orderedSolves = getAverageEligibleSolves(solves)
         .sort((a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0));
     if (orderedSolves.length < size) return null;
@@ -724,7 +829,7 @@ function bestAverageDay(solves, size) {
     let best = null;
     for (let index = 0; index <= orderedSolves.length - size; index += 1) {
         const window = orderedSolves.slice(index, index + size);
-        const value = calculateAverage(window);
+        const value = calculateAverage(window, stat);
         if (!Number.isFinite(value)) continue;
 
         if (!best || value < best.value) {
