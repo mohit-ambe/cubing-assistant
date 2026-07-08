@@ -718,7 +718,24 @@ def merge_snapshots(left, right, mode="newest"):
     theme = choose_record(left_theme, right_theme, mode) if (left_theme or right_theme) else {}
     left_stats_config = left.get("statsConfig") if isinstance(left.get("statsConfig"), list) else None
     right_stats_config = right.get("statsConfig") if isinstance(right.get("statsConfig"), list) else None
-    stats_config = left_stats_config if mode == "drive" else right_stats_config
+    left_stats_updated_at = int(left.get("statsConfigUpdatedAt") or 0)
+    right_stats_updated_at = int(right.get("statsConfigUpdatedAt") or 0)
+    if mode == "drive":
+        stats_config = left_stats_config
+        stats_config_updated_at = left_stats_updated_at
+    elif mode == "local":
+        stats_config = right_stats_config
+        stats_config_updated_at = right_stats_updated_at
+    elif left_stats_config and right_stats_config:
+        if left_stats_updated_at >= right_stats_updated_at:
+            stats_config = left_stats_config
+            stats_config_updated_at = left_stats_updated_at
+        else:
+            stats_config = right_stats_config
+            stats_config_updated_at = right_stats_updated_at
+    else:
+        stats_config = right_stats_config or left_stats_config
+        stats_config_updated_at = right_stats_updated_at or left_stats_updated_at
     stats_config = stats_config or right_stats_config or left_stats_config
     return {
         "schemaVersion": 2,
@@ -727,6 +744,7 @@ def merge_snapshots(left, right, mode="newest"):
         "sessionScrambleIndexes": session_scramble_indexes,
         "solves": list(merged_solves.values()),
         "statsConfig": stats_config or [],
+        "statsConfigUpdatedAt": stats_config_updated_at,
         "theme": theme,
     }
 

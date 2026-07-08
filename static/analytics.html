@@ -63,14 +63,18 @@
 
                 </select>
             </label>
-            <label>
-                <span>Rolling</span>
-                <select id="rollingFilter">
-                    <option selected value="100">ao100</option>
-                    <option value="12">ao12</option>
-                    <option value="5">ao5</option>
+            <div aria-label="Rolling stat" class="rolling-controls">
+                <button aria-label="Rolling stat type" data-value="average" id="rollingType" type="button">Average
+                </button>
+                <input aria-label="Rolling solve count" id="rollingSize" inputmode="numeric" min="2" step="1"
+                       type="number" value="5">
+                <input aria-label="Rolling trim amount" id="rollingTrim" inputmode="numeric" min="0" step="1"
+                       type="number" value="1">
+                <select aria-label="Rolling trim unit" id="rollingTrimUnit">
+                    <option selected value="solves">solves</option>
+                    <option value="percent">%</option>
                 </select>
-            </label>
+            </div>
         </section>
     </header>
 

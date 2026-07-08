@@ -79,6 +79,12 @@ hardDeleteDialogEl.addEventListener("cancel", (event) => {
     }
     closeHardDeleteDialog();
 });
+closeDialogOnBackdrop(hardDeleteDialogEl, () => {
+    if (!hardDeleteBusy) closeHardDeleteDialog();
+});
+closeDialogOnBackdrop(accountSwitchDialogEl, () => {
+    if (!resolvingAccountSwitch) cancelAccountSwitch();
+});
 window.addEventListener("storage", (event) => {
     if (event.key === LAST_SYNC_STORAGE_KEY) {
         renderLastSynced();
@@ -86,6 +92,21 @@ window.addEventListener("storage", (event) => {
 });
 window.addEventListener("focus", renderLastSynced);
 init();
+
+function closeDialogOnBackdrop(dialog, close) {
+    dialog.addEventListener("click", (event) => {
+        if (event.target !== dialog || !isBackdropClick(dialog, event)) return;
+        close();
+    });
+}
+
+function isBackdropClick(dialog, event) {
+    const rect = dialog.getBoundingClientRect();
+    return event.clientX < rect.left
+        || event.clientX > rect.right
+        || event.clientY < rect.top
+        || event.clientY > rect.bottom;
+}
 
 async function init() {
     migrateDataOwnerProfile();
@@ -641,6 +662,7 @@ function createLocalSnapshot() {
         sessionScrambleIndexes: saved.sessionScrambleIndexes || {},
         solves: Array.isArray(saved.solves) ? saved.solves : [],
         statsConfig: Array.isArray(saved.statsConfig) ? saved.statsConfig : undefined,
+        statsConfigUpdatedAt: Number(saved.statsConfigUpdatedAt || 0),
         theme: saved.theme || {},
     };
 }
@@ -653,6 +675,7 @@ function applySnapshot(snapshot) {
         sessionScrambleIndexes: snapshot.sessionScrambleIndexes || {},
         solves: Array.isArray(snapshot.solves) ? snapshot.solves : [],
         statsConfig: Array.isArray(snapshot.statsConfig) ? snapshot.statsConfig : saved.statsConfig,
+        statsConfigUpdatedAt: Number(snapshot.statsConfigUpdatedAt || saved.statsConfigUpdatedAt || 0),
         theme: snapshot.theme || saved.theme || {},
     };
     localStorage.setItem(TIMER_STORAGE_KEY, JSON.stringify(next));
@@ -666,16 +689,29 @@ function mergeSnapshots(local, drive, mode) {
         sessions: mergeRecordsById(local.sessions || [], drive.sessions || [], mode, "session"),
         sessionScrambleIndexes: mode === "drive" ? {...(local.sessionScrambleIndexes || {}), ...(drive.sessionScrambleIndexes || {})} : {...(drive.sessionScrambleIndexes || {}), ...(local.sessionScrambleIndexes || {})},
         solves: mergeRecordsById(local.solves || [], drive.solves || [], mode, "solve"),
-        statsConfig: chooseStatsConfig(local.statsConfig, drive.statsConfig, mode),
+        statsConfig: chooseStatsConfig(local.statsConfig, drive.statsConfig, mode, local.statsConfigUpdatedAt, drive.statsConfigUpdatedAt),
+        statsConfigUpdatedAt: chooseStatsConfigUpdatedAt(local, drive, mode),
         theme: chooseRecord(local.theme || {}, drive.theme || {}, mode),
     };
 }
 
-function chooseStatsConfig(localConfig, driveConfig, mode) {
+function chooseStatsConfig(localConfig, driveConfig, mode, localUpdatedAt = 0, driveUpdatedAt = 0) {
     const local = Array.isArray(localConfig) ? localConfig : null;
     const drive = Array.isArray(driveConfig) ? driveConfig : null;
     if (mode === "drive") return drive || local || undefined;
+    if (mode === "local") return local || drive || undefined;
+    if (local && drive) return Number(localUpdatedAt) >= Number(driveUpdatedAt) ? local : drive;
     return local || drive || undefined;
+}
+
+function chooseStatsConfigUpdatedAt(local, drive, mode) {
+    const localUpdatedAt = Number(local.statsConfigUpdatedAt || 0);
+    const driveUpdatedAt = Number(drive.statsConfigUpdatedAt || 0);
+    const hasLocal = Array.isArray(local.statsConfig);
+    const hasDrive = Array.isArray(drive.statsConfig);
+    if (mode === "drive") return hasDrive ? driveUpdatedAt : localUpdatedAt;
+    if (mode === "local") return hasLocal ? localUpdatedAt : driveUpdatedAt;
+    return Math.max(localUpdatedAt, driveUpdatedAt);
 }
 
 function mergeRecordsById(localRecords, driveRecords, mode, type) {

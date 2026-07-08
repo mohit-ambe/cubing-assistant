@@ -621,8 +621,14 @@ scramble-display {
     text-underline-offset: 3px;
 }
 
+.confirm-dialog.stats-editor-dialog {
+    max-width: min(480px, calc(100vw - 32px));
+    width: min(480px, calc(100vw - 32px));
+}
+
 .stats-editor-dialog form {
-    max-width: min(560px, calc(100vw - 32px));
+    max-width: none;
+    width: 100%;
 }
 
 .stats-editor-list {
@@ -756,6 +762,19 @@ scramble-display {
 
 .stats-editor-status {
     min-height: 18px;
+}
+
+.stats-trim-caption {
+    color: var(--muted);
+    font: 300 5px/8px "JetBrains Mono", monospace;
+    margin: 0;
+    max-width: 360px;
+    text-align: left;
+}
+
+.stats-editor-dialog .dialog-actions {
+    align-items: center;
+    justify-content: space-between;
 }
 
 .times-list {

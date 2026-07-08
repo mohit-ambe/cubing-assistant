@@ -112,6 +112,7 @@ const state = {
     redoScramble: "",
     scrambleFontSize: 1.9,
     statsConfig: createDefaultStatsConfig(),
+    statsConfigUpdatedAt: 0,
     syncReady: false,
     syncTimeout: null,
     syncInterval: null,
@@ -282,11 +283,10 @@ function bindEvents() {
     });
 
     copyAverageLogEl.addEventListener("click", copyAverageLog);
-    averageDialogEl.addEventListener("click", (event) => {
-        if (event.target === averageDialogEl) {
-            averageDialogEl.close();
-        }
-    });
+    closeDialogOnBackdrop(clearConfirmDialogEl);
+    closeDialogOnBackdrop(createSessionDialogEl);
+    closeDialogOnBackdrop(statsEditorDialogEl);
+    closeDialogOnBackdrop(averageDialogEl);
 
     timesListEl.addEventListener("click", (event) => {
         const button = event.target.closest("button[data-action]");
@@ -886,6 +886,21 @@ function renderStats() {
     });
 }
 
+function closeDialogOnBackdrop(dialog, close = () => dialog.close()) {
+    dialog.addEventListener("click", (event) => {
+        if (event.target !== dialog || !isBackdropClick(dialog, event)) return;
+        close();
+    });
+}
+
+function isBackdropClick(dialog, event) {
+    const rect = dialog.getBoundingClientRect();
+    return event.clientX < rect.left
+        || event.clientX > rect.right
+        || event.clientY < rect.top
+        || event.clientY > rect.bottom;
+}
+
 function renderStatValueCell(cell, stat, column) {
     const value = stat[column];
     const text = stat.inspectable ? formatAverageValue(value?.value) : formatStatValue(value?.value);
@@ -1116,6 +1131,7 @@ function reorderConfiguredStat(draggedId, targetId, placeAfter = false, commit =
 
 function commitStatsConfig() {
     state.statsConfig = normalizeStatsConfig(state.statsConfig);
+    state.statsConfigUpdatedAt = Date.now();
     saveState({sync: true});
     renderStats();
     renderStatsEditor();
@@ -1384,6 +1400,7 @@ function loadSavedState() {
         state.lastDisplayMs = Number(saved.lastDisplayMs) || 0;
         state.scrambleFontSize = clamp(Number(saved.scrambleFontSize) || 1.9, 0.9, 3.2);
         state.statsConfig = normalizeStatsConfig(saved.statsConfig);
+        state.statsConfigUpdatedAt = Number(saved.statsConfigUpdatedAt || 0);
         state.inspectionEnabled = Boolean(saved.inspectionEnabled);
         state.drawingEnabled = saved.drawingEnabled !== false;
         state.timerUpdateMs = normalizeTimerUpdateMs(saved.timerUpdateMs);
@@ -1677,6 +1694,7 @@ function createSyncSnapshot() {
         sessionScrambleIndexes: state.sessionScrambleIndexes,
         solves: state.solves,
         statsConfig: state.statsConfig,
+        statsConfigUpdatedAt: state.statsConfigUpdatedAt,
         theme: state.theme,
     };
 }
@@ -1692,6 +1710,7 @@ function createStoredState() {
         lastDisplayMs: state.lastDisplayMs,
         scrambleFontSize: state.scrambleFontSize,
         statsConfig: state.statsConfig,
+        statsConfigUpdatedAt: state.statsConfigUpdatedAt,
         inspectionEnabled: state.inspectionEnabled,
         drawingEnabled: state.drawingEnabled,
         timerUpdateMs: state.timerUpdateMs,
@@ -1718,8 +1737,10 @@ function mergeRemoteState(remote) {
         state.theme = remote.theme;
         window.CubingAssistantTheme?.applyTheme(state.theme);
     }
-    if (Array.isArray(remote.statsConfig)) {
+    const remoteStatsUpdatedAt = Number(remote.statsConfigUpdatedAt || 0);
+    if (Array.isArray(remote.statsConfig) && remoteStatsUpdatedAt >= state.statsConfigUpdatedAt) {
         state.statsConfig = normalizeStatsConfig(remote.statsConfig);
+        state.statsConfigUpdatedAt = remoteStatsUpdatedAt;
     }
     renderSessionOptions();
 }

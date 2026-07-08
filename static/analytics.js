@@ -2,13 +2,6 @@ const STORAGE_KEY = "cubingAssistant.timerState";
 const ACCOUNT_SWITCH_STORAGE_KEY = "cubingAssistant.pendingAccountSwitch";
 const ACCOUNT_SWITCH_RESOLVED_STORAGE_KEY = "cubingAssistant.accountSwitchResolved";
 
-const SINGLE_STAT_CONFIG = {id: "single", type: "mean", size: 1};
-const DEFAULT_STATS_CONFIG = [
-    {id: "mo3", type: "mean", size: 3},
-    {id: "ao5", type: "average", size: 5, trimValue: 1, trimUnit: "solves"},
-    {id: "ao12", type: "average", size: 12, trimValue: 1, trimUnit: "solves"},
-    {id: "ao100", type: "average", size: 100, trimValue: 1, trimUnit: "solves"},
-];
 const EVENTS = [["222", "2x2"], ["333", "3x3"], ["444", "4x4"], ["555", "5x5"], ["666", "6x6"], ["777", "7x7"], ["333oh", "3x3 OH"], ["333bf", "3x3 Blindfolded"], ["333fm", "3x3 Fewest Moves"], ["333mbf", "3x3 Multi-Blind"], ["clock", "Clock"], ["minx", "Megaminx"], ["pyram", "Pyraminx"], ["skewb", "Skewb"], ["sq1", "Square-1"],];
 
 const scopeFilterEl = document.querySelector("#scopeFilter");
@@ -17,7 +10,10 @@ const timePartFieldEl = document.querySelector("#timePartField");
 const timePartFilterEl = document.querySelector("#timePartFilter");
 const dateTimelineEl = document.querySelector("#dateTimeline");
 const rangeFilterEl = document.querySelector("#rangeFilter");
-const rollingFilterEl = document.querySelector("#rollingFilter");
+const rollingTypeEl = document.querySelector("#rollingType");
+const rollingSizeEl = document.querySelector("#rollingSize");
+const rollingTrimEl = document.querySelector("#rollingTrim");
+const rollingTrimUnitEl = document.querySelector("#rollingTrimUnit");
 const summaryLineEl = document.querySelector("#summaryLine");
 const statCardsEl = document.querySelector("#statCards");
 const trendMetaEl = document.querySelector("#trendMeta");
@@ -32,7 +28,6 @@ const formatsMetaEl = document.querySelector("#formatsMeta");
 const state = {
     solves: [],
     sessions: [],
-    statsConfig: createDefaultStatsConfig(),
 };
 
 window.addEventListener("storage", (event) => {
@@ -47,15 +42,25 @@ async function init() {
     loadAnalyticsState();
     renderScopeOptions();
     renderTimePartOptions();
-    renderRollingOptions();
+    updateRollingControls();
     bindEvents();
     render();
     await pullRemoteState();
 }
 
 function bindEvents() {
-    [timePartFilterEl, rangeFilterEl, rollingFilterEl].forEach((control) => {
+    [timePartFilterEl, rangeFilterEl, rollingSizeEl, rollingTrimEl, rollingTrimUnitEl].forEach((control) => {
         control.addEventListener("change", render);
+    });
+    [rollingSizeEl, rollingTrimEl].forEach((control) => {
+        control.addEventListener("input", render);
+    });
+    rollingTypeEl.addEventListener("click", () => {
+        const nextType = getRollingType() === "average" ? "mean" : "average";
+        rollingTypeEl.dataset.value = nextType;
+        rollingTypeEl.textContent = nextType === "average" ? "Average" : "Mean";
+        updateRollingControls();
+        render();
     });
     dateTimelineEl.addEventListener("change", render);
     scopeFilterEl.addEventListener("change", () => {
@@ -74,14 +79,12 @@ function loadAnalyticsState() {
     if (!raw) {
         state.solves = [];
         state.sessions = [];
-        state.statsConfig = createDefaultStatsConfig();
         return;
     }
 
     try {
         const saved = JSON.parse(raw);
         state.sessions = Array.isArray(saved.sessions) ? saved.sessions : [];
-        state.statsConfig = normalizeStatsConfig(saved.statsConfig);
         state.solves = (Array.isArray(saved.solves) ? saved.solves : [])
             .filter((solve) => !solve.deletedAt && Number.isFinite(Number(solve.timeMs)) && Number.isFinite(Number(solve.createdAt)))
             .map((solve) => ({
@@ -95,7 +98,6 @@ function loadAnalyticsState() {
     } catch {
         state.solves = [];
         state.sessions = [];
-        state.statsConfig = createDefaultStatsConfig();
     }
 }
 
@@ -143,25 +145,22 @@ function renderTimePartOptions() {
         : "final";
 }
 
-function renderRollingOptions() {
-    const selected = rollingFilterEl.value || "ao100";
-    const rollingStats = getRollingStats();
-    rollingFilterEl.replaceChildren();
-    rollingStats.forEach((stat) => {
-        rollingFilterEl.append(new Option(getStatLabel(stat), stat.id));
-    });
-    rollingFilterEl.value = rollingStats.some((stat) => stat.id === selected)
-        ? selected
-        : rollingStats[0]?.id || "single";
-}
-
-function getRollingStats() {
-    return [SINGLE_STAT_CONFIG, ...state.statsConfig].filter((stat) => stat.size > 1);
-}
-
 function getSelectedRollingStat() {
-    const selected = rollingFilterEl.value;
-    return getRollingStats().find((stat) => stat.id === selected) || getRollingStats()[0] || SINGLE_STAT_CONFIG;
+    const type = getRollingType();
+    const size = normalizeStatSize(rollingSizeEl.value, type) || (type === "average" ? 5 : 3);
+    if (type === "mean") {
+        return {type, size};
+    }
+    return {
+        type,
+        size,
+        trimValue: normalizeTrimValue(rollingTrimEl.value),
+        trimUnit: rollingTrimUnitEl.value === "percent" ? "percent" : "solves",
+    };
+}
+
+function getRollingType() {
+    return rollingTypeEl.dataset.value === "mean" ? "mean" : "average";
 }
 
 function getStatLabel(config) {
@@ -169,29 +168,14 @@ function getStatLabel(config) {
     return `${config.type === "average" ? "ao" : "mo"}${config.size}`;
 }
 
-function createDefaultStatsConfig() {
-    return DEFAULT_STATS_CONFIG.map((config) => ({...config}));
-}
-
-function normalizeStatsConfig(configs) {
-    if (!Array.isArray(configs)) return createDefaultStatsConfig();
-    return configs.map(normalizeStatConfig).filter(Boolean);
-}
-
-function normalizeStatConfig(config) {
-    const type = config?.type === "average" ? "average" : "mean";
-    const size = normalizeStatSize(config?.size, type);
-    if (!size) return null;
-    const normalized = {
-        id: typeof config.id === "string" && config.id ? config.id : crypto.randomUUID(),
-        type,
-        size,
-    };
-    if (type === "average") {
-        normalized.trimUnit = config.trimUnit === "percent" ? "percent" : "solves";
-        normalized.trimValue = config.trimValue === undefined ? 1 : normalizeTrimValue(config.trimValue);
+function updateRollingControls() {
+    const isMean = getRollingType() === "mean";
+    rollingTrimEl.disabled = isMean;
+    rollingTrimUnitEl.disabled = isMean;
+    rollingSizeEl.min = isMean ? "2" : "3";
+    if (!normalizeStatSize(rollingSizeEl.value, isMean ? "mean" : "average")) {
+        rollingSizeEl.value = isMean ? "3" : "5";
     }
-    return normalized;
 }
 
 function normalizeStatSize(value, type) {
@@ -222,15 +206,12 @@ async function pullRemoteState() {
         saved.sessionScrambleIndexes = {
             ...(saved.sessionScrambleIndexes || {}), ...(remote.sessionScrambleIndexes || {}),
         };
-        if (Array.isArray(remote.statsConfig)) {
-            saved.statsConfig = remote.statsConfig;
-        }
         localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
 
         loadAnalyticsState();
         renderScopeOptions();
         renderTimePartOptions();
-        renderRollingOptions();
+        updateRollingControls();
         render();
     } catch {
         // Analytics remains available with local data while offline or disconnected.

@@ -52,6 +52,23 @@ a:hover, button:hover, select:hover {
     border-color: var(--primary);
 }
 
+input {
+    border: 1px solid var(--outline);
+    border-radius: 3px;
+    background: var(--surface-high);
+    color: var(--text);
+    font: 500 12px/16px "JetBrains Mono", monospace;
+    padding: .45rem .65rem;
+}
+
+input:disabled,
+select:disabled {
+    background: var(--surface-low);
+    color: var(--muted);
+    cursor: not-allowed;
+    opacity: .45;
+}
+
 .side-tabs {
     align-items: center;
     background: var(--bg);
@@ -176,6 +193,18 @@ p, .panel-heading span, label span {
 
 .filters [hidden] {
     display: none !important;
+}
+
+.rolling-controls {
+    align-items: center;
+    display: grid;
+    gap: 8px;
+    grid-template-columns: minmax(6.5rem, auto) 4.5rem 4.5rem minmax(5.75rem, auto);
+}
+
+.rolling-controls input {
+    min-width: 0;
+    width: 100%;
 }
 
 .timeline-switch {

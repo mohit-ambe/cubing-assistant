@@ -36,6 +36,7 @@ const state = {
     solves: [],
     sessionScrambleIndexes: {},
     statsConfig: null,
+    statsConfigUpdatedAt: 0,
     selectedSessionId: PLAYGROUND_SESSION_ID,
     stagedSessions: [],
     importJobId: null,
@@ -88,6 +89,14 @@ function bindEvents() {
     cstimerFileEl.addEventListener("change", readCstimerFile);
     commitImportEl.addEventListener("click", commitImport);
     cancelImportEl.addEventListener("click", cancelImport);
+    closeDialogOnBackdrop(sessionDialogEl);
+    closeDialogOnBackdrop(confirmDialogEl, () => {
+        pendingConfirm = null;
+        confirmDialogEl.close();
+    });
+    closeDialogOnBackdrop(importDialogEl, () => {
+        abortImportDialog();
+    });
     sessionListEl.addEventListener("click", (event) => {
         const item = event.target.closest("[data-session-id]");
         if (!item) return;
@@ -99,6 +108,21 @@ function bindEvents() {
         if (pendingConfirm) pendingConfirm();
         pendingConfirm = null;
     });
+}
+
+function closeDialogOnBackdrop(dialog, close = () => dialog.close()) {
+    dialog.addEventListener("click", (event) => {
+        if (event.target !== dialog || !isBackdropClick(dialog, event)) return;
+        close();
+    });
+}
+
+function isBackdropClick(dialog, event) {
+    const rect = dialog.getBoundingClientRect();
+    return event.clientX < rect.left
+        || event.clientX > rect.right
+        || event.clientY < rect.top
+        || event.clientY > rect.bottom;
 }
 
 function loadState() {
@@ -113,6 +137,7 @@ function loadState() {
     state.solves = Array.isArray(saved.solves) ? saved.solves : [];
     state.sessionScrambleIndexes = saved.sessionScrambleIndexes || {};
     state.statsConfig = Array.isArray(saved.statsConfig) ? saved.statsConfig : null;
+    state.statsConfigUpdatedAt = Number(saved.statsConfigUpdatedAt || 0);
     state.selectedSessionId = getVisibleSessions().some((session) => session.id === saved.activeSessionId) ? saved.activeSessionId : PLAYGROUND_SESSION_ID;
 }
 
@@ -136,6 +161,7 @@ function saveState({sync = true} = {}) {
         solves: state.solves,
         sessionScrambleIndexes: state.sessionScrambleIndexes,
         ...(state.statsConfig ? {statsConfig: state.statsConfig} : {}),
+        ...(state.statsConfig ? {statsConfigUpdatedAt: state.statsConfigUpdatedAt} : {}),
     }));
     if (sync) {
         localStorage.setItem(SYNC_DIRTY_STORAGE_KEY, String(Date.now()));
@@ -518,6 +544,15 @@ async function cancelImport() {
     }
 }
 
+async function abortImportDialog() {
+    if (state.importJobId) {
+        await cancelImport();
+        state.importJobId = null;
+    }
+    resetImport(true);
+    importDialogEl.close();
+}
+
 async function processIndexedImport(job) {
     cancelImportEl.hidden = false;
     cstimerFileEl.disabled = true;
@@ -882,6 +917,7 @@ async function pushRemoteState() {
             solves: state.solves,
             sessionScrambleIndexes: state.sessionScrambleIndexes,
             ...(state.statsConfig ? {statsConfig: state.statsConfig} : {}),
+            ...(state.statsConfig ? {statsConfigUpdatedAt: state.statsConfigUpdatedAt} : {}),
         }));
         localStorage.removeItem(SYNC_DIRTY_STORAGE_KEY);
         render();
@@ -893,7 +929,10 @@ function mergeRemote(remote) {
     state.solves = mergeById(state.solves, remote.solves || []);
     state.sessions = normalizeSessions(mergeById(state.sessions, remote.sessions || []));
     state.sessionScrambleIndexes = {...state.sessionScrambleIndexes, ...(remote.sessionScrambleIndexes || {})};
-    if (Array.isArray(remote.statsConfig)) state.statsConfig = remote.statsConfig;
+    if (Array.isArray(remote.statsConfig) && Number(remote.statsConfigUpdatedAt || 0) >= state.statsConfigUpdatedAt) {
+        state.statsConfig = remote.statsConfig;
+        state.statsConfigUpdatedAt = Number(remote.statsConfigUpdatedAt || 0);
+    }
 }
 
 function mergeById(left, right) {
@@ -918,6 +957,7 @@ function createSnapshot() {
         solves: state.solves,
         sessionScrambleIndexes: state.sessionScrambleIndexes,
         ...(state.statsConfig ? {statsConfig: state.statsConfig} : {}),
+        ...(state.statsConfig ? {statsConfigUpdatedAt: state.statsConfigUpdatedAt} : {}),
         theme: getStoredTheme()
     };
 }
