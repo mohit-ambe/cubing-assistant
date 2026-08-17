@@ -320,6 +320,90 @@ label span {
     white-space: nowrap;
 }
 
+.stat-average-button {
+    background: transparent;
+    border: 0;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    padding: 0;
+    text-decoration: none;
+    text-underline-offset: 3px;
+}
+
+.stat-average-button:hover {
+    color: var(--primary);
+    text-decoration: underline;
+}
+
+.average-dialog {
+    background: var(--surface-low);
+    border: 1px solid var(--outline);
+    border-radius: 4px;
+    color: var(--text);
+    height: min(34rem, calc(100dvh - 32px));
+    max-height: calc(100dvh - 32px);
+    max-width: none;
+    padding: 0;
+    width: min(24rem, calc(100vw - 32px));
+}
+
+.average-dialog::backdrop {
+    background: rgba(0, 0, 0, .62);
+}
+
+.average-dialog form {
+    display: grid;
+    gap: 12px;
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    height: 100%;
+    margin: 0;
+    padding: 16px;
+}
+
+.average-dialog h2,
+.average-dialog p {
+    margin: 0;
+}
+
+.average-dialog p {
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.average-times {
+    border: 1px solid var(--outline);
+    list-style: none;
+    margin: 0;
+    min-height: 0;
+    overflow: auto;
+    padding: 0;
+}
+
+.average-times li {
+    border-bottom: 1px solid var(--outline);
+    font: 500 12px/18px "JetBrains Mono", monospace;
+    padding: 8px 10px;
+}
+
+.average-times li:last-child {
+    border-bottom: 0;
+}
+
+.average-times li.average-best {
+    color: var(--good);
+}
+
+.average-times li.average-worst {
+    color: var(--danger);
+}
+
+.dialog-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+}
+
 .chart-grid {
     grid-template-columns: repeat(6, minmax(0, 1fr));
     grid-template-rows: repeat(2, minmax(0, 1fr));

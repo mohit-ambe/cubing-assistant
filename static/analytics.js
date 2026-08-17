@@ -24,6 +24,10 @@ const distributionChartEl = document.querySelector("#distributionChart");
 const dailyChartEl = document.querySelector("#dailyChart");
 const eventChartEl = document.querySelector("#eventChart");
 const formatsMetaEl = document.querySelector("#formatsMeta");
+const averageDialogEl = document.querySelector("#averageDialog");
+const averageDialogTitleEl = document.querySelector("#averageDialogTitle");
+const averageDialogSummaryEl = document.querySelector("#averageDialogSummary");
+const averageDialogTimesEl = document.querySelector("#averageDialogTimes");
 
 const state = {
     solves: [],
@@ -72,6 +76,7 @@ function bindEvents() {
         renderTimePartOptions();
         render();
     });
+    closeDialogOnBackdrop(averageDialogEl);
 }
 
 function loadAnalyticsState() {
@@ -287,19 +292,56 @@ function renderStatCards(solves, rollingStat = getSelectedRollingStat()) {
     const activeDayCount = groupByDay(solves).length;
     const bestSingle = bestSingleContext(solves);
     const bestRolling = bestRollingContext(solves, rollingStat);
-    const cards = [["Solves", String(solves.length), activeDayCount ? `${formatDecimal(solves.length / activeDayCount)} / day` : "-- / day"], ["Best Single", formatMaybeTime(Math.min(...validTimes)), bestSingle ? formatStatDate(bestSingle.timestamp) : "--"], ["Average", formatMaybeTime(calculateAverage(solves, {type: "average", size: solves.length, trimValue: 1, trimUnit: "solves"}))], [`Best ${getStatLabel(rollingStat)}`, formatMaybeTime(bestRolling?.value), bestRolling ? formatStatDate(bestRolling.timestamp) : "--"], ["Active days", String(activeDayCount), `${formatDuration(totalSolveTime(solves))}, ${formatDuration(totalSolveTime(solves) / activeDayCount)} / day`], ["Best day", bestAo5Day ? formatBestDayDate(bestAo5Day.timestamp) : "--", bestAo5Day ? `ao5 ${formatTime(bestAo5Day.value)}` : "ao5 --"],];
+    const cards = [
+        {label: "Solves", value: String(solves.length), detail: activeDayCount ? `${formatDecimal(solves.length / activeDayCount)} / day` : "-- / day"},
+        {label: "Best Single", value: formatMaybeTime(Math.min(...validTimes)), detail: bestSingle ? formatStatDate(bestSingle.timestamp) : "--"},
+        {label: "Average", value: formatMaybeTime(calculateAverage(solves, {type: "average", size: solves.length, trimValue: 1, trimUnit: "solves"}))},
+        {label: `Best ${getStatLabel(rollingStat)}`, value: formatMaybeTime(bestRolling?.value), detail: bestRolling ? formatStatDate(bestRolling.timestamp) : "--", average: bestRolling, stat: rollingStat},
+        {label: "Active days", value: String(activeDayCount), detail: `${formatDuration(totalSolveTime(solves))}, ${formatDuration(totalSolveTime(solves) / activeDayCount)} / day`},
+        {label: "Best day", value: bestAo5Day ? formatBestDayDate(bestAo5Day.timestamp) : "--", detail: bestAo5Day ? `ao5 ${formatTime(bestAo5Day.value)}` : "ao5 --"},
+    ];
 
     statCardsEl.replaceChildren();
-    cards.forEach(([label, value, detail]) => {
+    cards.forEach(({label, value, detail, average, stat}) => {
         const card = document.createElement("article");
         card.className = "stat-card";
         if (detail) card.classList.add("has-detail");
         card.innerHTML = `<div class="stat-label"></div><div class="stat-value"></div><div class="stat-detail"></div>`;
         card.querySelector(".stat-label").textContent = label;
-        card.querySelector(".stat-value").textContent = value;
+        const valueEl = card.querySelector(".stat-value");
+        if (average?.solves?.length) {
+            const button = document.createElement("button");
+            button.className = "stat-average-button";
+            button.type = "button";
+            button.textContent = value;
+            button.addEventListener("click", () => showAverageDialog(average, stat));
+            valueEl.append(button);
+        } else {
+            valueEl.textContent = value;
+        }
         card.querySelector(".stat-detail").textContent = detail || "";
         statCardsEl.append(card);
     });
+}
+
+function showAverageDialog(average, stat) {
+    if (!average?.solves?.length) return;
+    const trimCount = stat.type === "average" ? getAverageTrimCount(average.solves.length, stat) : 0;
+    const trimmedIds = getAverageTrimmedSolveIds(average.solves, trimCount);
+    const averageText = formatMaybeTime(average.value);
+    averageDialogTitleEl.textContent = `Best ${getStatLabel(stat)} ${averageText}`;
+    averageDialogSummaryEl.textContent = formatStatDate(average.timestamp);
+    averageDialogTimesEl.replaceChildren();
+
+    average.solves.forEach((solve) => {
+        const item = document.createElement("li");
+        item.classList.toggle("average-best", trimmedIds.best.has(solve.id));
+        item.classList.toggle("average-worst", trimmedIds.worst.has(solve.id));
+        item.textContent = formatAverageSolveLine(solve, trimmedIds);
+        averageDialogTimesEl.append(item);
+    });
+
+    averageDialogEl.showModal();
 }
 
 function renderTrendChart(solves, rollingStat) {
@@ -794,11 +836,30 @@ function bestRollingContext(solves, stat) {
         if (!Number.isFinite(value)) continue;
         if (!best || value < best.value) {
             best = {
-                value, timestamp: window[window.length - 1].createdAt,
+                value,
+                timestamp: window[window.length - 1].createdAt,
+                solves: window,
             };
         }
     }
     return best;
+}
+
+function getAverageTrimmedSolveIds(solves, trimCount) {
+    const best = new Set();
+    const worst = new Set();
+    if (!trimCount) return {best, worst};
+    const sorted = [...solves].sort((left, right) => getAdjustedTime(left) - getAdjustedTime(right));
+    sorted.slice(0, trimCount).forEach((solve) => best.add(solve.id));
+    sorted.slice(-trimCount).forEach((solve) => worst.add(solve.id));
+    return {best, worst};
+}
+
+function formatAverageSolveLine(solve, trimmedIds) {
+    const penalty = timePartFilterEl.value === "final" && solve.penalty && solve.penalty !== "OK" ? ` ${solve.penalty}` : "";
+    const value = getAdjustedTime(solve);
+    const line = `${Number.isFinite(value) ? formatTime(value) : "DNF"}${penalty}`;
+    return trimmedIds.best.has(solve.id) || trimmedIds.worst.has(solve.id) ? `(${line})` : line;
 }
 
 function bestAverageDay(solves, size) {
@@ -913,6 +974,21 @@ function renderEmpty(container, message) {
     empty.className = "empty-chart";
     empty.textContent = message;
     container.replaceChildren(empty);
+}
+
+function closeDialogOnBackdrop(dialog, close = () => dialog.close()) {
+    dialog.addEventListener("click", (event) => {
+        if (event.target !== dialog || !isBackdropClick(dialog, event)) return;
+        close();
+    });
+}
+
+function isBackdropClick(dialog, event) {
+    const rect = dialog.getBoundingClientRect();
+    return event.clientX < rect.left
+        || event.clientX > rect.right
+        || event.clientY < rect.top
+        || event.clientY > rect.bottom;
 }
 
 function tableCell(text, className = "") {
