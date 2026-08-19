@@ -6,7 +6,7 @@ const PLAYGROUND_SESSION_ID = "playground";
 const IMPORT_DB_NAME = "cubingAssistantImports";
 const IMPORT_DB_VERSION = 1;
 const IMPORT_BATCH_SIZE = 500;
-const CSTIMER_EVENTS = {
+const EXTERNAL_EVENTS = {
     "222so": "222",
     "333": "333",
     "333oh": "333oh",
@@ -52,7 +52,7 @@ const sessionNameEl = document.querySelector("#sessionName");
 const sessionEventEl = document.querySelector("#sessionEvent");
 const sessionSplitsEl = document.querySelector("#sessionSplits");
 const importDialogEl = document.querySelector("#importDialog");
-const cstimerFileEl = document.querySelector("#cstimerFile");
+const externalFileEl = document.querySelector("#externalFile");
 const importRowsEl = document.querySelector("#importRows");
 const importSummaryEl = document.querySelector("#importSummary");
 const importErrorEl = document.querySelector("#importError");
@@ -81,12 +81,12 @@ function bindEvents() {
     searchEl.addEventListener("input", renderSessionList);
     filterEl.addEventListener("change", renderSessionList);
     document.querySelector("#newSession").addEventListener("click", openCreateDialog);
-    document.querySelector("#importCstimer").addEventListener("click", () => {
+    document.querySelector("#importExternal").addEventListener("click", () => {
         if (!importDialogEl.open) importDialogEl.showModal();
     });
     document.querySelector("#exportBackup").addEventListener("click", exportBackup);
     document.querySelector("#saveSession").addEventListener("click", saveCreatedSession);
-    cstimerFileEl.addEventListener("change", readCstimerFile);
+    externalFileEl.addEventListener("change", readExternalFile);
     commitImportEl.addEventListener("click", commitImport);
     cancelImportEl.addEventListener("click", cancelImport);
     closeDialogOnBackdrop(sessionDialogEl);
@@ -322,53 +322,53 @@ function showConfirm(title, text, action) {
     confirmDialogEl.showModal();
 }
 
-async function readCstimerFile() {
+async function readExternalFile() {
     resetImport();
-    const file = cstimerFileEl.files[0];
+    const file = externalFileEl.files[0];
     if (!file) return;
     if (!("indexedDB" in window)) {
         showImportError("This browser does not support IndexedDB, which is required for resumable imports.");
         return;
     }
     setImportProgress(0, "Reading");
-    cstimerFileEl.disabled = true;
+    externalFileEl.disabled = true;
     try {
-        const job = await stageCstimerFile(file);
+        const job = await stageExternalFile(file);
         state.importJobId = job.id;
         renderImportJob(job);
     } catch (error) {
         showImportError(error.message);
-        cstimerFileEl.disabled = false;
+        externalFileEl.disabled = false;
         importProgressEl.hidden = true;
     }
 }
 
-async function stageCstimerFile(file) {
+async function stageExternalFile(file) {
     let data;
     try {
         data = JSON.parse(await file.text());
     } catch (error) {
-        throw new Error(`Could not parse the csTimer file: ${error.message}`);
+        throw new Error(`Could not parse the external file: ${error.message}`);
     }
     if (!data || typeof data !== "object" || Array.isArray(data)) {
-        throw new Error("The selected file is not a csTimer backup.");
+        throw new Error("The selected file is not an external backup.");
     }
 
-    const metadata = parseCstimerSessionMetadata(data.properties?.sessionData);
+    const metadata = parseExternalSessionMetadata(data.properties?.sessionData);
     const sourceKeys = Object.keys(data)
         .filter((key) => /^session\d+$/.test(key) && Array.isArray(data[key]) && data[key].length)
         .sort((left, right) => Number(left.slice(7)) - Number(right.slice(7)));
-    if (!sourceKeys.length) throw new Error("No csTimer sessions were found in this backup.");
+    if (!sourceKeys.length) throw new Error("No external sessions were found in this backup.");
 
     const jobId = crypto.randomUUID();
     const sessions = sourceKeys.map((sourceKey) => {
         const number = sourceKey.slice(7);
         const sessionMetadata = metadata[number] && typeof metadata[number] === "object" ? metadata[number] : {};
-        const phaseCount = normalizeCstimerPhaseCount(sessionMetadata.opt?.phases);
+        const phaseCount = normalizeExternalPhaseCount(sessionMetadata.opt?.phases);
         return {
             key: sourceKey,
-            name: String(sessionMetadata.name || `csTimer ${sourceKey}`),
-            event: detectCstimerEvent(sessionMetadata),
+            name: String(sessionMetadata.name || `External ${sourceKey}`),
+            event: detectExternalEvent(sessionMetadata),
             phaseCount,
             solveCount: data[sourceKey].length,
             action: "create",
@@ -466,8 +466,8 @@ function resetImport(clearFile = false) {
     commitImportEl.disabled = true;
     cancelImportEl.hidden = true;
     importProgressEl.hidden = true;
-    cstimerFileEl.disabled = false;
-    if (clearFile) cstimerFileEl.value = "";
+    externalFileEl.disabled = false;
+    if (clearFile) externalFileEl.value = "";
 }
 
 async function resumeActiveImport() {
@@ -483,7 +483,7 @@ async function resumeActiveImport() {
 
 function renderImportJob(job) {
     state.importJobId = job.id;
-    cstimerFileEl.disabled = !["completed", "failed", "cancelled"].includes(job.status);
+    externalFileEl.disabled = !["completed", "failed", "cancelled"].includes(job.status);
     cancelImportEl.hidden = ["awaiting_configuration", "completed", "failed", "cancelled"].includes(job.status);
     importErrorEl.hidden = true;
 
@@ -506,10 +506,10 @@ function renderImportJob(job) {
 
     if (job.status === "failed") {
         showImportError(job.error || "The import failed.");
-        cstimerFileEl.disabled = false;
+        externalFileEl.disabled = false;
     } else if (job.status === "cancelled") {
         importSummaryEl.textContent = "Import stopped.";
-        cstimerFileEl.disabled = false;
+        externalFileEl.disabled = false;
     } else if (job.status === "completed" && state.importTerminalHandled !== job.id) {
         state.importTerminalHandled = job.id;
         const result = job.result || {};
@@ -555,15 +555,15 @@ async function abortImportDialog() {
 
 async function processIndexedImport(job) {
     cancelImportEl.hidden = false;
-    cstimerFileEl.disabled = true;
+    externalFileEl.disabled = true;
     while (job.status === "importing" && job.processedSolves < job.totalSolves) {
         const rawBatch = await getImportSolveBatch(job.id, job.processedSolves, IMPORT_BATCH_SIZE);
-        if (!rawBatch.length) throw new Error("The staged import is incomplete. Select the csTimer file again.");
+        if (!rawBatch.length) throw new Error("The staged import is incomplete. Select the external file again.");
         const selectedByKey = new Map(job.sessions.map((session) => [session.key, session]));
         const converted = (await Promise.all(rawBatch.map(async (entry) => {
             const selected = selectedByKey.get(entry.sourceKey);
             if (!selected || selected.action === "skip") return null;
-            return convertCstimerSolve(entry.sourceKey, selected.event, selected.sessionId, entry.rawSolve, job.importedAt);
+            return convertExternalSolve(entry.sourceKey, selected.event, selected.sessionId, entry.rawSolve, job.importedAt);
         }))).filter(Boolean);
         const importSolves = restoreDeletedImportedSolves(converted);
         const sessions = buildImportSessions(job.sessions);
@@ -662,8 +662,8 @@ function restoreDeletedImportedSolves(solves) {
                 phaseTimesMs: solve.phaseTimesMs,
                 source: {
                     ...(existing.source || {}),
-                    ...(solve.source?.cstimerCumulativeSplitsMs ? {
-                        cstimerCumulativeSplitsMs: solve.source.cstimerCumulativeSplitsMs,
+                    ...(getExternalCumulativeSplits(solve) ? {
+                        externalCumulativeSplitsMs: getExternalCumulativeSplits(solve),
                     } : {}),
                 },
                 updatedAt: Math.max(now, updatedAt(existing) + 1, updatedAt(solve) + 1),
@@ -703,7 +703,7 @@ function buildImportSessions(configuredSessions) {
         });
 }
 
-function parseCstimerSessionMetadata(value) {
+function parseExternalSessionMetadata(value) {
     if (value && typeof value === "object") return value;
     if (typeof value !== "string") return {};
     try {
@@ -714,19 +714,19 @@ function parseCstimerSessionMetadata(value) {
     }
 }
 
-function normalizeCstimerPhaseCount(value) {
+function normalizeExternalPhaseCount(value) {
     const count = Math.floor(Number(value));
     return Number.isFinite(count) && count >= 2 ? Math.min(count, 20) : null;
 }
 
-function detectCstimerEvent(metadata) {
+function detectExternalEvent(metadata) {
     const scrambleType = metadata?.opt?.scrType || "";
-    if (CSTIMER_EVENTS[scrambleType]) return CSTIMER_EVENTS[scrambleType];
+    if (EXTERNAL_EVENTS[scrambleType]) return EXTERNAL_EVENTS[scrambleType];
     const name = String(metadata?.name || "").toLowerCase();
     return EVENTS.find(([, label]) => name.includes(label.toLowerCase()))?.[0] || "333";
 }
 
-async function convertCstimerSolve(sourceKey, event, sessionId, rawSolve, importedAt) {
+async function convertExternalSolve(sourceKey, event, sessionId, rawSolve, importedAt) {
     if (!Array.isArray(rawSolve) || !Array.isArray(rawSolve[0])) {
         throw new Error(`${sourceKey} contains an invalid solve.`);
     }
@@ -780,9 +780,13 @@ async function convertCstimerSolve(sourceKey, event, sessionId, rawSolve, import
         for (let index = boundaries.length - 2; index >= 0; index -= 1) {
             solve.phaseTimesMs.push(boundaries[index] - boundaries[index + 1]);
         }
-        solve.source.cstimerCumulativeSplitsMs = cumulativeSplits;
+        solve.source.externalCumulativeSplitsMs = cumulativeSplits;
     }
     return solve;
+}
+
+function getExternalCumulativeSplits(solve) {
+    return solve.source?.externalCumulativeSplitsMs || solve.source?.cstimerCumulativeSplitsMs;
 }
 
 function jsNumberString(value) {

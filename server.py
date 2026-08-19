@@ -45,7 +45,7 @@ IMPORT_WORKER_STOP = threading.Event()
 IMPORT_WORKER_THREAD = None
 DRIVE_LOCKS = {}
 DRIVE_LOCKS_GUARD = threading.Lock()
-CSTIMER_EVENTS = {
+EXTERNAL_EVENTS = {
     "222so": "222",
     "333": "333",
     "333oh": "333oh",
@@ -649,9 +649,9 @@ def merge_import_batch(subject, incoming, mode="newest", import_mode=False):
             if existing and not (import_mode and existing.get("deletedAt")):
                 if import_mode and solve.get("phaseTimesMs") and not existing.get("phaseTimesMs"):
                     existing["phaseTimesMs"] = solve["phaseTimesMs"]
-                    if solve.get("source", {}).get("cstimerCumulativeSplitsMs"):
-                        existing.setdefault("source", {})["cstimerCumulativeSplitsMs"] = solve["source"][
-                            "cstimerCumulativeSplitsMs"]
+                    cumulative_splits = external_cumulative_splits(solve)
+                    if cumulative_splits:
+                        existing.setdefault("source", {})["externalCumulativeSplitsMs"] = cumulative_splits
                     existing["updatedAt"] = max(now, record_updated_at(existing) + 1, record_updated_at(solve) + 1)
                     enriched += 1
                 duplicates += 1
@@ -880,10 +880,10 @@ def import_job_cancelled(job_id):
     return not job or job["status"] == "cancelled"
 
 
-def detect_cstimer_event(metadata):
+def detect_external_event(metadata):
     scr_type = metadata.get("opt", {}).get("scrType", "") if isinstance(metadata, dict) else ""
-    if scr_type in CSTIMER_EVENTS:
-        return CSTIMER_EVENTS[scr_type]
+    if scr_type in EXTERNAL_EVENTS:
+        return EXTERNAL_EVENTS[scr_type]
     name = str(metadata.get("name", "") if isinstance(metadata, dict) else "").lower()
     for event_id, label in EVENT_LABELS.items():
         if label.lower() in name:
@@ -921,12 +921,12 @@ class JsonStreamReader:
     def peek(self):
         self.skip_whitespace()
         if self.position >= len(self.buffer):
-            raise RuntimeError("The csTimer backup ended unexpectedly.")
+            raise RuntimeError("The external backup ended unexpectedly.")
         return self.buffer[self.position]
 
     def expect(self, character):
         if self.peek() != character:
-            raise RuntimeError(f"Expected '{character}' in the csTimer backup.")
+            raise RuntimeError(f"Expected '{character}' in the external backup.")
         self.position += 1
 
     def value(self):
@@ -942,11 +942,11 @@ class JsonStreamReader:
                 return value
             except json.JSONDecodeError as error:
                 if self.eof:
-                    raise RuntimeError(f"Invalid csTimer JSON near character {error.pos}.") from error
+                    raise RuntimeError(f"Invalid external JSON near character {error.pos}.") from error
                 self.fill()
 
 
-def scan_cstimer_backup(path, solve_callback=None):
+def scan_external_backup(path, solve_callback=None):
     counts = {}
     metadata = {}
     try:
@@ -959,7 +959,7 @@ def scan_cstimer_backup(path, solve_callback=None):
             while True:
                 key = reader.value()
                 if not isinstance(key, str):
-                    raise RuntimeError("The csTimer backup contains a non-text property name.")
+                    raise RuntimeError("The external backup contains a non-text property name.")
                 reader.expect(":")
                 if key.removeprefix("session").isdigit() and reader.peek() == "[":
                     count = 0
@@ -990,11 +990,11 @@ def scan_cstimer_backup(path, solve_callback=None):
                     break
                 reader.expect(",")
     except (OSError, UnicodeError) as error:
-        raise RuntimeError(f"Could not read the csTimer backup: {error}") from error
+        raise RuntimeError(f"Could not read the external backup: {error}") from error
     return counts, metadata
 
 
-def inspect_cstimer_import(job):
+def inspect_external_import(job):
     job_id = job["id"]
     update_import_job(job_id, status="inspecting", error=None)
     inspected = 0
@@ -1006,7 +1006,7 @@ def inspect_cstimer_import(job):
             raise InterruptedError
 
     try:
-        counts, metadata = scan_cstimer_backup(job["source_path"], check_cancelled)
+        counts, metadata = scan_external_backup(job["source_path"], check_cancelled)
     except InterruptedError:
         return
     if import_job_cancelled(job_id):
@@ -1014,7 +1014,7 @@ def inspect_cstimer_import(job):
 
     ordered_keys = sorted(counts, key=lambda value: int(value.removeprefix("session")))
     if not ordered_keys:
-        raise RuntimeError("No csTimer sessions were found in this backup.")
+        raise RuntimeError("No external sessions were found in this backup.")
 
     rows = []
     for source_order, source_key in enumerate(ordered_keys):
@@ -1029,8 +1029,8 @@ def inspect_cstimer_import(job):
             phase_count = None
         if phase_count is not None and phase_count < 2:
             phase_count = None
-        rows.append((job_id, source_key, source_order, str(session_meta.get("name") or f"csTimer {source_key}"),
-                     detect_cstimer_event(session_meta), phase_count, counts[source_key],))
+        rows.append((job_id, source_key, source_order, str(session_meta.get("name") or f"External {source_key}"),
+                     detect_external_event(session_meta), phase_count, counts[source_key],))
 
     with import_db() as connection:
         connection.execute("DELETE FROM import_sessions WHERE job_id = ?", (job_id,))
@@ -1055,7 +1055,7 @@ def numeric_json_value(value):
     return int(number) if number.is_integer() else number
 
 
-def convert_cstimer_solve(source_key, event, session_id, raw_solve, imported_at):
+def convert_external_solve(source_key, event, session_id, raw_solve, imported_at):
     if not isinstance(raw_solve, (list, tuple)) or not raw_solve or not isinstance(raw_solve[0], (list, tuple)):
         raise RuntimeError(f"{source_key} contains an invalid solve.")
     try:
@@ -1100,11 +1100,16 @@ def convert_cstimer_solve(source_key, event, session_id, raw_solve, imported_at)
             raise RuntimeError(f"{source_key} contains split times outside the solve duration.")
         solve["phaseTimesMs"] = [numeric_json_value(boundaries[index] - boundaries[index + 1]) for index in
                                  range(len(boundaries) - 2, -1, -1)]
-        solve["source"]["cstimerCumulativeSplitsMs"] = cumulative_splits
+        solve["source"]["externalCumulativeSplitsMs"] = cumulative_splits
     return solve
 
 
-def stage_cstimer_solves(job, configuration):
+def external_cumulative_splits(solve):
+    source = solve.get("source", {}) if isinstance(solve, dict) else {}
+    return source.get("externalCumulativeSplitsMs") or source.get("cstimerCumulativeSplitsMs")
+
+
+def stage_external_solves(job, configuration):
     job_id = job["id"]
     source_path = Path(job["source_path"])
     imported_at = int(time.time() * 1000)
@@ -1121,7 +1126,7 @@ def stage_cstimer_solves(job, configuration):
         processed += 1
         selected = selected_by_key.get(source_key)
         if selected:
-            solve = convert_cstimer_solve(source_key, selected["event"], selected["sessionId"], raw_solve,
+            solve = convert_external_solve(source_key, selected["event"], selected["sessionId"], raw_solve,
                                           imported_at, )
             batch.append((job_id, solve["id"], json.dumps(solve, separators=(",", ":"))))
         if len(batch) >= IMPORT_BATCH_SIZE:
@@ -1132,7 +1137,7 @@ def stage_cstimer_solves(job, configuration):
             batch.clear()
 
     try:
-        scan_cstimer_backup(source_path, stage_solve)
+        scan_external_backup(source_path, stage_solve)
     except InterruptedError:
         return
     if batch:
@@ -1185,7 +1190,7 @@ def build_import_snapshot(job, configuration):
                 if solve.get("phaseTimesMs") and not existing.get("phaseTimesMs"):
                     existing["phaseTimesMs"] = solve["phaseTimesMs"]
                     existing.setdefault("source", {}).update({
-                        "cstimerCumulativeSplitsMs": solve["source"]["cstimerCumulativeSplitsMs"],
+                        "externalCumulativeSplitsMs": external_cumulative_splits(solve),
                     })
                     staged_phase_count = phase_counts_by_session.get(solve.get("sessionId"))
                     if staged_phase_count and existing.get("sessionId"):
@@ -1316,7 +1321,7 @@ def process_import_job(job):
     job_id = job["id"]
     try:
         if job["status"] == "uploaded":
-            inspect_cstimer_import(job)
+            inspect_external_import(job)
             return
         resumable_output = Path(job["output_path"]) if job["output_path"] else None
         if job["drive_upload_uri"] and resumable_output and resumable_output.exists():
@@ -1330,7 +1335,7 @@ def process_import_job(job):
         if not configuration:
             raise RuntimeError("Import configuration is missing.")
         update_import_job(job_id, status="parsing", error=None, processed_solves=0)
-        stage_cstimer_solves(job, configuration)
+        stage_external_solves(job, configuration)
         if import_job_cancelled(job_id):
             return
         with drive_subject_lock(job["google_sub"]):
@@ -1377,7 +1382,7 @@ def start_import_worker():
     if IMPORT_WORKER_THREAD and IMPORT_WORKER_THREAD.is_alive():
         return
     IMPORT_WORKER_STOP.clear()
-    IMPORT_WORKER_THREAD = threading.Thread(target=import_worker, name="cstimer-import-worker", daemon=True)
+    IMPORT_WORKER_THREAD = threading.Thread(target=import_worker, name="external-import-worker", daemon=True)
     IMPORT_WORKER_THREAD.start()
     IMPORT_WORKER_EVENT.set()
 
@@ -1851,7 +1856,7 @@ async def create_import(request: Request):
         raise ApiError("Connect Google Drive before importing.", 409)
     await run_in_threadpool(start_import_worker)
 
-    file_name = request.headers.get("x-file-name", "cstimer-backup.json").strip()[:255] or "cstimer-backup.json"
+    file_name = request.headers.get("x-file-name", "external-backup.json").strip()[:255] or "external-backup.json"
     content_length = request.headers.get("content-length")
     if content_length:
         try:

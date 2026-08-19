@@ -797,6 +797,7 @@ function renderScramble() {
     const total = state.scrambles.length;
     const scramble = getCurrentScramble();
     scrambleEl.textContent = scramble || "No scramble loaded";
+    scrambleEl.classList.toggle("redo-scramble", Boolean(state.redoSolveId));
     scrambleDrawingEl.setAttribute("event", state.activeEvent);
     scrambleDrawingEl.setAttribute("scramble", scramble);
 }

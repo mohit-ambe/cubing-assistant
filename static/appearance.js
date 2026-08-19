@@ -220,8 +220,8 @@ const controlsEl = document.querySelector("#themeControls");
 const presetsEl = document.querySelector("#themePresets");
 const modeToggleEl = document.querySelector("#themeModeToggle");
 const statusEl = document.querySelector("#themeStatus");
-const fileEl = document.querySelector("#cstimerThemeFile");
-const lineEl = document.querySelector("#cstimerColorLine");
+const fileEl = document.querySelector("#externalThemeFile");
+const lineEl = document.querySelector("#externalColorLine");
 const messageEl = document.querySelector("#importMessage");
 const applyLineEl = document.querySelector("#applyColorLine");
 
@@ -235,7 +235,7 @@ function init() {
     modeToggleEl.checked = appearanceMode === "light";
     renderPresets();
     renderControls();
-    fileEl.addEventListener("change", importCstimerFile);
+    fileEl.addEventListener("change", importExternalFile);
     applyLineEl.addEventListener("click", importColorLine);
     modeToggleEl.addEventListener("change", () => {
         appearanceMode = modeToggleEl.checked ? "light" : "dark";
@@ -285,14 +285,14 @@ function renderControls() {
     });
 }
 
-async function importCstimerFile() {
+async function importExternalFile() {
     const file = fileEl.files[0];
     if (!file) return;
     try {
         const data = JSON.parse(await file.text());
-        const imported = extractCstimerTheme(data);
-        if (!imported) throw new Error("No csTimer color data found.");
-        setTheme(imported, "csTimer file colors imported.");
+        const imported = extractExternalTheme(data);
+        if (!imported) throw new Error("No external color data found.");
+        setTheme(imported, "External file colors imported.");
     } catch (error) {
         setMessage(`Could not import file: ${error.message}`, true);
     } finally {
@@ -302,8 +302,8 @@ async function importCstimerFile() {
 
 function importColorLine() {
     try {
-        const imported = themeFromCstimerColorLine(lineEl.value);
-        setTheme(imported, "csTimer color line imported.");
+        const imported = themeFromExternalColorLine(lineEl.value);
+        setTheme(imported, "External color line imported.");
     } catch (error) {
         setMessage(error.message, true);
     }
@@ -345,23 +345,23 @@ function applyTheme(nextTheme) {
     statusEl.textContent = "Saved locally";
 }
 
-function extractCstimerTheme(data) {
+function extractExternalTheme(data) {
     const properties = data?.properties;
     if (!properties || typeof properties !== "object") return null;
     const colors = [properties["col-font"], properties["col-back"], properties["col-board"], properties["col-button"], properties["col-link"], properties["col-logo"], properties["col-logoback"], properties["col-pbs"] || properties["col-pb"],].map(normalizeHexColor);
     if (colors.every((color) => !color)) return null;
-    return themeFromCstimerColors(colors);
+    return themeFromExternalColors(colors);
 }
 
-function themeFromCstimerColorLine(line) {
+function themeFromExternalColorLine(line) {
     const colors = String(line || "").match(/#[0-9a-f]{6}|#[0-9a-f]{3}/gi);
     if (!colors || colors.length !== 8) {
-        throw new Error("Paste exactly eight csTimer colors, for example #eee#035#034#111#28d#678#034#f40.");
+        throw new Error("Paste exactly eight external colors, for example #eee#035#034#111#28d#678#034#f40.");
     }
-    return themeFromCstimerColors(colors.map(normalizeHexColor));
+    return themeFromExternalColors(colors.map(normalizeHexColor));
 }
 
-function themeFromCstimerColors(colors) {
+function themeFromExternalColors(colors) {
     const [font, background, board, button, link, logo, logoBackground, pbs] = colors;
     return normalizeTheme({
         "--text": font,

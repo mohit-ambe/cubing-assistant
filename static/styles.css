@@ -260,6 +260,10 @@ button[data-action="delete"]:hover {
     text-align: center;
 }
 
+.scramble.redo-scramble {
+    font-style: italic;
+}
+
 .resize-handle {
     background: var(--outline);
     min-height: 0;

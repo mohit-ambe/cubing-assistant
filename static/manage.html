@@ -46,8 +46,7 @@
         </div>
         <div class="sidebar-actions">
             <button id="newSession" type="button"><span class="material-symbols-outlined">add</span> New</button>
-            <button id="importCstimer" type="button"><span class="material-symbols-outlined">upload_file</span> Import
-                csTimer
+            <button id="importExternal" type="button"><span class="material-symbols-outlined">upload_file</span> Import
             </button>
             <button id="exportBackup" title="Export application backup" type="button"><span
                     class="material-symbols-outlined">download</span></button>
@@ -76,16 +75,16 @@
     <form method="dialog">
         <div class="dialog-heading">
             <div>
-                <h2>Import csTimer backup</h2>
-                <p id="importSummary">Choose a csTimer export file.</p>
+                <h2>Import backup</h2>
+                <p id="importSummary">Choose an export file.</p>
             </div>
             <button aria-label="Close" type="submit" value="cancel"><span class="material-symbols-outlined">close</span>
             </button>
         </div>
         <label class="file-picker">
             <span class="material-symbols-outlined">upload_file</span>
-            <span>Select csTimer file</span>
-            <input accept=".txt,.json,application/json,text/plain" id="cstimerFile" type="file">
+            <span>Select file</span>
+            <input accept=".txt,.json,application/json,text/plain" id="externalFile" type="file">
         </label>
         <div class="import-progress" hidden id="importProgress">
             <div class="import-progress-track"><span id="importProgressBar"></span></div>
