@@ -301,7 +301,12 @@ function bindEvents() {
         }
 
         if (button.dataset.action === "redo") {
-            startRedo(solveId);
+            if (solveId === state.redoSolveId) {
+                cancelRedo();
+                render();
+            } else {
+                startRedo(solveId);
+            }
             return;
         }
 
@@ -396,6 +401,13 @@ function onKeyDown(event) {
         event.preventDefault();
         if (isInspectionState()) cancelInspection();
         else cancelTimerReadying();
+        return;
+    }
+
+    if (event.key === "Enter" && state.timerState === "idle" && state.redoSolveId) {
+        event.preventDefault();
+        cancelRedo();
+        render();
         return;
     }
 
@@ -850,7 +862,7 @@ function renderTimerState() {
     }
 
     if (state.timerState === "holding") {
-        statusEl.textContent = state.redoSolveId ? "Redo readying" : "Keep holding";
+        statusEl.textContent = "Keep holding";
         timerEl.textContent = formatTime(state.lastDisplayMs);
         return;
     }
@@ -861,7 +873,7 @@ function renderTimerState() {
         return;
     }
 
-    statusEl.textContent = state.redoSolveId ? "Redo mode: hold space to replace the selected time" : "Hold space to ready, release to start";
+    statusEl.textContent = state.redoSolveId ? "Redo (press enter to cancel)" : "Hold space to ready, release to start";
     timerEl.textContent = formatTime(state.lastDisplayMs);
 }
 
@@ -1248,7 +1260,10 @@ function renderTimes() {
         redoButton.type = "button";
         redoButton.dataset.action = "redo";
         redoButton.dataset.solveId = solve.id;
-        redoButton.textContent = solve.id === state.redoSolveId ? "Redoing" : "Redo";
+        redoButton.textContent = solve.id === state.redoSolveId ? "Cancel" : "Redo";
+        redoButton.title = solve.id === state.redoSolveId
+            ? "Cancel redo. You can also press Enter."
+            : "Redo this solve";
         makeMouseOnlyControl(redoButton);
 
         const deleteButton = document.createElement("button");
